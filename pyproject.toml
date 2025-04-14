@@ -1,0 +1,90 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "DeepDETAILS"
+dynamic = ["version"]
+description = "Deep-learning-based DEconvolution of Tissue profiles with Accurate Interpretation of Locus-specific Signals"
+readme = "README.md"
+requires-python = ">=3.8"
+license = "GPL-3.0-or-later"
+keywords = []
+authors = [
+  { name = "Li Yao", email = "regulatorygenome@gmail.com" },
+]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Programming Language :: Python",
+  "Programming Language :: Python :: 3.8",
+  "Programming Language :: Python :: 3.9",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: Implementation :: CPython",
+  "Programming Language :: Python :: Implementation :: PyPy",
+]
+dependencies = [
+  "torch", "numpy", "pandas", "h5py", "pyfaidx",
+  "pytorch-lightning", "torchmetrics", "einops",
+  "matplotlib", "tqdm", "biopython", "scikit-learn",
+  "pyBigWig", "pybedtools", "tensorboard",
+  "scipy>=1.11.1", "wandb"
+]
+
+[project.scripts]
+deepdetails = "deepdetails.cli:deepdetails"
+
+[project.urls]
+Documentation = "https://github.com/liyao001/DeepDETAILS"
+Issues = "https://github.com/liyao001/DeepDETAILS/issues"
+Source = "https://github.com/liyao001/DeepDETAILS"
+
+[tool.hatch.version]
+path = "src/deepdetails/__about__.py"
+
+[tool.hatch.envs.default]
+dependencies = [
+  "coverage[toml]>=6.5",
+  "pytest",
+]
+[tool.hatch.envs.default.scripts]
+test = "pytest {args:tests}"
+test-cov = "coverage run -m pytest {args:tests}"
+cov-report = [
+  "- coverage combine",
+  "coverage report",
+]
+cov = [
+  "test-cov",
+  "cov-report",
+]
+
+[[tool.hatch.envs.all.matrix]]
+python = ["3.8", "3.9", "3.10", "3.11", "3.12"]
+
+[tool.hatch.envs.types]
+dependencies = [
+  "mypy>=1.0.0",
+]
+[tool.hatch.envs.types.scripts]
+check = "mypy --install-types --non-interactive {args:src/deepdetails tests}"
+
+[tool.coverage.run]
+source_pkgs = ["deepdetails", "tests"]
+branch = true
+parallel = true
+omit = [
+  "src/deepdetails/__about__.py",
+]
+
+[tool.coverage.paths]
+deepdetails = ["src/deepdetails", "*/deepdetails/src/deepdetails"]
+tests = ["tests", "*/deepdetails/tests"]
+
+[tool.coverage.report]
+exclude_lines = [
+  "no cov",
+  "if __name__ == .__main__.:",
+  "if TYPE_CHECKING:",
+]

@@ -1,0 +1,7 @@
+_.strand  # unused attribute (src/deepdetails/data.py:121)
+_.example_input_array  # unused attribute (src/deepdetails/model/wrapper.py:83)
+_.training_step  # unused method (src/deepdetails/model/wrapper.py:128)
+_.validation_step  # unused method (src/deepdetails/model/wrapper.py:185)
+_.test_step  # unused method (src/deepdetails/model/wrapper.py:269)
+_.configure_optimizers  # unused method (src/deepdetails/model/wrapper.py:343)
+_.names  # unused attribute (src/deepdetails/protocols.py:232)
