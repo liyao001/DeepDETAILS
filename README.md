@@ -13,7 +13,7 @@
 DeepDETAILS can be installed via `conda`: 
 
 ```console
-conda install -c conda-forge "pytorch=2.6.0=cuda*" bioconda::deepdetails
+conda install -c bioconda -c conda-forge "pytorch=2.6.0=cuda*" deepdetails
 ```
 
 DeepDETAILS can also be installed via `pip`:
