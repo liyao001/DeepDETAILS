@@ -237,7 +237,7 @@ def _export_results(model: pl.LightningModule, dataset: callable, checkpoint: st
 def export_results(model: pl.LightningModule, dataset: Union[callable, str], checkpoint: str, batch_size: int,
                    num_workers: int, save_to: str, loads_trunc: Optional[int] = None,
                    study_name: str = "", y_length: int = 1000, rescaling_mode: int = 0,
-                   pos_only: bool = True, device: str = "cpu"):
+                   merge_strands: bool = False, pos_only: bool = True, device: str = "cpu"):
     """
     Exports results to a hdf5 file
 
@@ -265,6 +265,10 @@ def export_results(model: pl.LightningModule, dataset: Union[callable, str], che
         {rescaling_mode}
     pos_only : bool, optional
         {test_pos_only}
+    merge_strands : bool, optional
+        {merge_strands}
+    device : str, optional
+        {device}
 
     Returns
     -------
@@ -276,7 +280,7 @@ def export_results(model: pl.LightningModule, dataset: Union[callable, str], che
     )
     _export_results(
         model, pred_ds, checkpoint, batch_size, num_workers, save_to,
-        study_name, y_length, rescaling_mode, device
+        study_name, y_length, rescaling_mode, device, merge_strands
     )
 
 

@@ -202,7 +202,7 @@ def internal_qc(metrics: list[float], pred_counts: torch.Tensor):
 
     cr_sum_collapsed = torch.isclose(pred_counts, torch.zeros_like(pred_counts), atol=0.1).sum().item() == 0
     cr_br_cor = qc_val > 1. or later < 0.4
-    return (qc_val, pred_counts), cr_br_cor, cr_sum_collapsed
+    return (float(qc_val), pred_counts.tolist()), cr_br_cor, cr_sum_collapsed
 
 
 def calc_counts_per_locus(profiles: Union[Tuple[torch.Tensor, ...], List[torch.Tensor]],
@@ -275,7 +275,7 @@ def rescaling_prediction(pc_profiles: list[torch.Tensor], pc_counts: list[torch.
         ps_counts = torch.stack(pc_counts).sum(axis=0)
         # calculate rescale factor (k)
         # k * y_hat = y
-        k = expected_bulk_counts / ps_counts
+        k = expected_bulk_counts / torch.clamp(ps_counts, min=1e-15)
         # get the rescaled counts
         pc_counts = [pcc * k for pcc in pc_counts]
         cluster_preds = calc_counts_per_locus(pc_profiles, pc_counts, True).cpu().numpy()
@@ -283,7 +283,7 @@ def rescaling_prediction(pc_profiles: list[torch.Tensor], pc_counts: list[torch.
         bulk_preds = cluster_preds.sum(axis=0)
         # calculate rescale factor (k)
         # k * y_hat = y
-        k = expected_bulk_profiles.cpu() / (bulk_preds + 10e-16)
+        k = expected_bulk_profiles.cpu() / (bulk_preds + 1e-15)
         # rescale
         cluster_preds = (k * cluster_preds).numpy()
     return cluster_preds

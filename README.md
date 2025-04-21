@@ -10,14 +10,19 @@
 
 ## Installation
 
-DeepDETAILS can be installed via `pip`: 
+DeepDETAILS can be installed via `conda`: 
 
+```console
+conda install -c conda-forge "pytorch=2.6.0=cuda*" bioconda::deepdetails
+```
+
+DeepDETAILS can also be installed via `pip`:
 ```console
 pip install DeepDETAILS
 ```
 
-To export the results to bigWig files, please make sure you have [`bedGraphToBigWig`](https://hgdownload.cse.ucsc.edu/admin/exe/linux.x86_64/bedGraphToBigWig) 
-and [`bedtools`](https://bedtools.readthedocs.io/en/latest/) installed.
+> If you prefer to install DeepDETAILS using pip, please make sure you have [`bedGraphToBigWig`](https://hgdownload.cse.ucsc.edu/admin/exe/linux.x86_64/bedGraphToBigWig) 
+and [`bedtools`](https://bedtools.readthedocs.io/en/latest/) installed. DeepDETAILS use these tools to export the deconvolved results to bigWig files. 
 
 ## Get started
 
