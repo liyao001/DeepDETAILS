@@ -83,6 +83,7 @@ class SequenceSignalDataset(Dataset):
         """.format(**PARAM_DESC)
         self.expected_data_file = os.path.join(root, "data.h5")
         assert os.path.exists(self.expected_data_file)
+        self.dataset_h5 = None
         self.dataset = None
         self.load_groundtruth = False
         self.has_acc_norm = False
@@ -211,29 +212,30 @@ class SequenceSignalDataset(Dataset):
             prior : torch.Tensor
 
         """
-        if self.dataset is None:
-            self.dataset = h5py.File(self.expected_data_file, "r")["dec"]
+        if self.dataset_h5 is None:
+            self.dataset_h5 = h5py.File(self.expected_data_file, "r")
+            self.dataset = self.dataset_h5["dec"]
 
         hit = self.df.iloc[idx]
         abs_i = hit["index"]
 
-        seq = torch.abs(torch.tensor(self.dataset["seq"][abs_i, :, :])).float()
-        acc = torch.tensor(self.dataset["acc"][abs_i, :, :])
+        seq = torch.from_numpy(np.abs(self.dataset["seq"][abs_i, :, :])).float()
+        acc = torch.from_numpy(self.dataset["acc"][abs_i, :, :]).float()
 
         if self.load_groundtruth and "ref" in self.dataset:
             ground_truth = []
             for cid in range(self.n_clusters):
                 offset = self.n_targets * cid
                 ground_truth.append(
-                    torch.tensor(self.dataset["ref"][abs_i, offset:offset + self.n_targets,
+                    torch.from_numpy(self.dataset["ref"][abs_i, offset:offset + self.n_targets,
                                  self.y_truncation:-self.y_truncation]).abs())
         else:
             ground_truth = []
 
         if self.y_truncation > 0:
-            y = torch.tensor(self.dataset["bulk"][abs_i, :, self.y_truncation:-self.y_truncation]).abs()
+            y = torch.from_numpy(self.dataset["bulk"][abs_i, :, self.y_truncation:-self.y_truncation]).abs()
         else:
-            y = torch.tensor(self.dataset["bulk"][abs_i, :, :]).abs()
+            y = torch.from_numpy(self.dataset["bulk"][abs_i, :, :]).abs()
 
         loads = torch.zeros(self.n_clusters)
         for i in range(self.n_clusters):

@@ -3,7 +3,7 @@ import os
 from glob import glob
 from deepdetails.__about__ import __version__
 from deepdetails.par_description import PARAM_DESC
-from deepdetails.protocols import deconv, prepare_dataset, export_results, export_wg_results, pred_to_bw, merge_rep_preds
+from deepdetails.protocols import deconv, prepare_dataset, export_results, export_wg_results, pred_to_bw, merge_rep_preds, export_attr
 from deepdetails.model.wrapper import DeepDETAILS
 from deepdetails.helper.utils import is_valid_file
 
@@ -42,18 +42,24 @@ def _training_parser(parent_parser: argparse.ArgumentParser):
                        type=int, default=50)
     group.add_argument("--save-top-k-model", help=PARAM_DESC["save_top_k_model"],
                        default=1, type=int)
+    group.add_argument("--resume", "--resume-from-ckpt", dest="resume_from_ckpt",
+                       help=PARAM_DESC["resume_from_ckpt"], type=str)
     # for backward compatibility
     g = group.add_mutually_exclusive_group()
     g.add_argument("--save-preds", action="store_true", default=True, help=PARAM_DESC["save_preds"])
     g.add_argument("--no-preds", action="store_false", dest="save_preds", help=PARAM_DESC["no_preds"])
-    group.add_argument("--redundancy-loss-coef", help=PARAM_DESC["redundancy_loss_coef"],
-                       type=float, default=1.0)
+    group.add_argument("--alpha", "--redundancy-loss-coef", help=PARAM_DESC["redundancy_loss_coef"],
+                       type=float, default=1.0, dest="redundancy_loss_coef")
     group.add_argument("--prior-loss-coef", help=PARAM_DESC["prior_loss_coef"],
                        type=float, default=1.0)
     group.add_argument("--gamma", help=PARAM_DESC["gamma"],
                        type=float, default=1e-8)
     group.add_argument("--learning-rate", help=PARAM_DESC["learning_rate"],
                        type=float, default=1e-3)
+    group.add_argument("--lr-step-size", help=PARAM_DESC["lr_step_size"],
+                       type=int, default=1)
+    group.add_argument("--lr-gamma", help=PARAM_DESC["lr_gamma"],
+                       type=float, default=0.1)
     group.add_argument("--betas", help=PARAM_DESC["betas"],
                        type=float, default=(0.9, 0.999), nargs=2)
     group.add_argument("--model-summary-depth", help=PARAM_DESC["max_depth"],
@@ -117,7 +123,7 @@ def _prep_dataset_parser(parent_parser: argparse.ArgumentParser):
                        help=PARAM_DESC["regions"])
     group.add_argument("--bulk-pl", required=True, type=lambda _x: is_valid_file(_x), help=PARAM_DESC["bulk_pl"])
     group.add_argument("--bulk-mn", type=lambda _x: is_valid_file(_x), help=PARAM_DESC["bulk_mn"])
-    group.add_argument("--save-to", default=".", type=lambda _x: is_valid_file(_x, is_dir=True),
+    group.add_argument("--save-to", default=".", type=lambda _x: is_valid_file(_x, is_dir=True, create_dir=True),
                        help=PARAM_DESC["save_to"])
     group.add_argument("--genome-fa", type=lambda _x: is_valid_file(_x), required=True, help=PARAM_DESC["genome_fa"])
     group.add_argument("--chrom-size", type=lambda _x: is_valid_file(_x), required=True, help=PARAM_DESC["chrom_size"])
@@ -132,7 +138,10 @@ def _prep_dataset_parser(parent_parser: argparse.ArgumentParser):
                        help=PARAM_DESC["background_blacklist"])
     group.add_argument("--final-regions", action="store_true", help=PARAM_DESC["final_regions"])
     group.add_argument("--keep-frags", action="store_true", help=PARAM_DESC["keep_frags"])
+    group.add_argument("--disable-rpm", action="store_true", help=PARAM_DESC["disable_rpm"])
     group.add_argument("--memory-saving", action="store_true", help=PARAM_DESC["memory_saving"])
+    group.add_argument("--collapse-missing-cell-types", action="store_true",
+                       help=PARAM_DESC["collapse_missing_cell_types"])
     group.add_argument("--merge-overlap-peaks", help=PARAM_DESC["merge_overlap_peaks"],
                        type=int, default=0)
     group.add_argument("--target-sliding-sum", help=PARAM_DESC["target_sliding_sum"],
@@ -146,7 +155,9 @@ def _prep_dataset_parser(parent_parser: argparse.ArgumentParser):
 
 def _preflight_parser(parent_parser: argparse.ArgumentParser):
     group = parent_parser.add_argument_group("Preflight")
-    group.add_argument("--skip-preflight", action="store_true", help=PARAM_DESC["skip_preflight"])
+    group0 = group.add_mutually_exclusive_group(required=False)
+    group0.add_argument("--skip-preflight", action="store_true", help=PARAM_DESC["skip_preflight"])
+    group0.add_argument("--combine-cell-types", type=str, nargs="*", help=PARAM_DESC["combine_cell_types"])
     group.add_argument("--accessible-regions", dest="accessible_peaks", required=False,
                        type=lambda _x: is_valid_file(_x), help=PARAM_DESC["accessible_peaks"])
     group.add_argument("--preflight-cutoff", help=PARAM_DESC["preflight_cutoff"],
@@ -227,7 +238,7 @@ def _build_bw_parser(parent_parser: argparse.ArgumentParser):
     group = parent_parser.add_argument_group("Export BigWig")
     group.add_argument("-p", "--pred-file", required=True, type=lambda _x: is_valid_file(_x),
                        help=PARAM_DESC["pred_file"])
-    group.add_argument("-s", "--save-to", default=".", type=lambda _x: is_valid_file(_x, is_dir=True),
+    group.add_argument("-s", "--save-to", default=".", type=lambda _x: is_valid_file(_x, is_dir=True, create_dir=True),
                        help=PARAM_DESC["save_to"])
     group.add_argument("-c", "--chrom-size", type=lambda _x: is_valid_file(_x), required=True,
                        help=PARAM_DESC["chrom_size"])
@@ -240,12 +251,24 @@ def _build_bw_parser(parent_parser: argparse.ArgumentParser):
     group.add_argument("--num-workers", help=PARAM_DESC["num_workers"], type=int, default=16)
 
 
+def _export_attr_parser(parent_parser: argparse.ArgumentParser):
+    group = parent_parser.add_argument_group("Export attribution tracks")
+    group.add_argument("-m", "--checkpoint", required=True, type=lambda _x: is_valid_file(_x),
+                       help=PARAM_DESC["checkpoint"])
+    group.add_argument("--dataset", required=True, type=lambda _x: is_valid_file(_x, is_dir=True),
+                       help=PARAM_DESC["dataset"])
+    group.add_argument("-c", "--chrom-size", type=lambda _x: is_valid_file(_x), required=False,
+                       help=PARAM_DESC["chrom_size"])
+    group.add_argument("--device", help=PARAM_DESC["device"], type=str, default="cuda")
+
+
 def _merge_preds(parent_parser: argparse.ArgumentParser):
     group = parent_parser.add_argument_group("Merge predictions from multipe replicate runs")
     g = group.add_mutually_exclusive_group(required=True)
     g.add_argument("--pred-dir", type=lambda _x: is_valid_file(_x, is_dir=True), help=PARAM_DESC["pred_dir"])
     g.add_argument("--preds", type=lambda _x: is_valid_file(_x), nargs="+", help=PARAM_DESC["preds"])
-    group.add_argument("--save-to", type=str, required=True, help=PARAM_DESC["save_to"])
+    group.add_argument("--save-to", type=str,
+                       required=True, help=PARAM_DESC["save_to"])
     group.add_argument("--keep-old-preds", action="store_true", help=PARAM_DESC["keep_old_preds"])
     group.add_argument("--quiet", action="store_true", help=PARAM_DESC["quiet"])
 
@@ -285,6 +308,11 @@ def deepdetails():
     parser_merge_preds = subparsers.add_parser("merge-preds", help="Merge predictions from multiple replicate runs")
     _merge_preds(parser_merge_preds)
 
+    # Subparser for exporting attributions
+    parser_export_pred = subparsers.add_parser("attr", help="Sequence attribution analysis")
+    _general_parser(parser_export_pred)
+    _export_attr_parser(parser_export_pred)
+
     args = parser.parse_args()
     args_dict = vars(args).copy()
     args_dict.pop("function")
@@ -313,6 +341,9 @@ def deepdetails():
             in_pred_files=pred_files, save_to=args.save_to,
             keep_old=args.keep_old_preds, quiet=args.quiet,
         )
+    elif args.function == "attr":
+        [args_dict.pop(k) for k in {"version", "study_name", "num_workers"} if k in args_dict]
+        export_attr(**args_dict)
     else:
         parser.print_help()
 

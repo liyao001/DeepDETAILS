@@ -13,15 +13,18 @@ from tqdm import tqdm
 from pytorch_lightning.utilities import move_data_to_device
 from deepdetails.par_description import PARAM_DESC
 from deepdetails.__about__ import __version__
+from deepdetails.helper.attr import ModelWithSummarization, ReducedDataset, ixg, write_scores_to_bigwigs
 from deepdetails.helper.utils import get_trainer, slugify, internal_qc, rescaling_prediction, compare_dicts
 from deepdetails.model.wrapper import DeepDETAILS
 from deepdetails.data import SequenceSignalDataset, DynamicDataset
-from deepdetails.helper.prep_ds import (extend_regions_from_mid_points, combine_regions, generate_gc_matched_random_regions,
-                                        build_data_volume, convert_bulk_frags_to_ct_frags, frag_file_to_bw)
+from deepdetails.helper.prep_ds import (extend_regions_from_mid_points, combine_regions, create_empty_bigwig,
+                                        generate_gc_matched_random_regions, build_data_volume,
+                                        convert_bulk_frags_to_ct_frags, frag_file_to_bw, merge_fragment_files)
 from deepdetails.helper.preflight import preflight_check
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(format="%(levelname)s | %(asctime)s | %(message)s", level=logging.INFO)
+__DD_OTHERS_MAGIC = "D.D.OTHERS"
 
 
 def deconv(dataset: str, save_to: str, study_name: str, batch_size: int, num_workers: int, min_delta: float,
@@ -31,11 +34,11 @@ def deconv(dataset: str, save_to: str, study_name: str, batch_size: int, num_wor
            gamma: float, wandb_upload_model: bool, profile_shrinkage: int, filters: int, n_non_dil_layers: int,
            non_dil_kernel_size: int, n_dilated_layers: int, dil_kernel_size: int, head_layers: int,
            conv1_kernel_size: int, gru_layers: int, gru_dropout: float, profile_kernel_size: int,
-           redundancy_loss_coef: float, prior_loss_coef: float, rescaling_mode: int,
-           scale_function_placement: str, learning_rate: float, betas: Tuple[float, float],
+           redundancy_loss_coef: float, prior_loss_coef: float, rescaling_mode: int, scale_function_placement: str,
+           learning_rate: float, betas: Tuple[float, float], lr_step_size: int, lr_gamma: float,
            all_regions: bool = False, test_pos_only: bool = True, max_retry: int = 3,
            cv: Optional[Tuple[str, ...]] = None, ct: Optional[Tuple[str, ...]] = None, n_times_more_embeddings: int = 2,
-           loads_trunc: Optional[int] = None, seq_only: Optional[bool] = False):
+           resume_from_ckpt: Optional[str] = None, loads_trunc: Optional[int] = None, seq_only: Optional[bool] = False):
     """
     Deconvolve a bulk sequencing library with DETAILS
     """
@@ -60,9 +63,9 @@ def deconv(dataset: str, save_to: str, study_name: str, batch_size: int, num_wor
         '\t'.join(["{0}: {1}".format(k, v) for k, v in _aux_info.items()])))
 
     train_iter = DataLoader(ds, batch_size=batch_size, shuffle=True,
-                            num_workers=num_workers, pin_memory=True)
+                            num_workers=num_workers, pin_memory=False)
     test_iter = DataLoader(test_ds, batch_size=batch_size, shuffle=False,
-                           num_workers=num_workers, pin_memory=True)
+                           num_workers=num_workers, pin_memory=False)
     # generate roughly 10 screenshots
     test_screenshots_ratio = 10 / len(test_iter)
 
@@ -90,12 +93,12 @@ def deconv(dataset: str, save_to: str, study_name: str, batch_size: int, num_wor
                             scale_function_placement=scale_function_placement, num_tasks=ds.n_targets,
                             gru_layers=gru_layers, gru_dropout=gru_dropout,
                             n_times_more_embeddings=n_times_more_embeddings,
-                            learning_rate=learning_rate, betas=betas,
+                            learning_rate=learning_rate, betas=betas, lr_step_size=lr_step_size, lr_gamma=lr_gamma,
                             version=ver, t_x=ds.t_x, test_screenshot_ratio=test_screenshots_ratio,
                             gamma=gamma, seq_only=seq_only)
 
         logger.info("Start building model...")
-        trainer.fit(model, train_dataloaders=train_iter, val_dataloaders=None)
+        trainer.fit(model, ckpt_path=resume_from_ckpt, train_dataloaders=train_iter, val_dataloaders=None)
 
         logger.info("Evaluating model's performances...")
         trainer.test(model, test_iter)
@@ -173,7 +176,7 @@ def _export_results(model: pl.LightningModule, dataset: callable, checkpoint: st
     trained_model = model.load_from_checkpoint(checkpoint).to(device=device)
 
     pred_iter = DataLoader(dataset, batch_size=batch_size * 4, shuffle=False,
-                           num_workers=num_workers, pin_memory=True)
+                           num_workers=num_workers, pin_memory=False)
 
     # disable grads + batchnorm + dropout
     torch.set_grad_enabled(False)
@@ -392,6 +395,8 @@ def pred_to_bw(pred_file: str, save_to: str, chrom_size: str, min_abs_val: float
     logger.info("Converting bedGraph files to bigWig files")
     jobs = []
     for idx_cluster in range(n_clusters):
+        if cluster_names[idx_cluster] == __DD_OTHERS_MAGIC:
+            continue
         safe_cluster_name = slugify(cluster_names[idx_cluster])
         for idx_strand in range(n_strands):
             bg_file = os.path.join(save_to, f"C{idx_cluster}.{STRAND_LABELS[idx_strand]}.bg")
@@ -418,7 +423,8 @@ def prepare_dataset(regions: Sequence[str], bulk_pl: str, save_to: str, window_s
                     accessible_peaks: Optional[str] = None, preflight_cutoff: float = 0.035, nu: float = 0.85,
                     candidate_qval: float = 0.01, candidate_fc: float = 2, max_top_n: int = 1000, n_aggs: int = 5,
                     min_cells_required: Optional[int] = 20, memory_saving: Optional[bool] = False,
-                    use_qnorm: Optional[bool] = False):
+                    use_qnorm: Optional[bool] = False, disable_rpm: Optional[bool] = False,
+                    collapse_missing_cell_types: Optional[bool] = False, combine_cell_types: Optional[Sequence[str]] = None,):
     """Build a dataset for DETAILS
 
     Parameters
@@ -485,6 +491,12 @@ def prepare_dataset(regions: Sequence[str], bulk_pl: str, save_to: str, window_s
         {memory_saving}
     use_qnorm : Optional[bool]
         {use_qnorm}
+    disable_rpm : Optional[bool]
+        {disable_rpm}
+    collapse_missing_cell_types : Optional[bool]
+        {collapse_missing_cell_types}
+    combine_cell_types : Optional[Sequence[str]]
+        {combine_cell_types}
     """.format(**PARAM_DESC)
     norm_factors = None
     if accessibility is None and fragments is None:
@@ -551,18 +563,60 @@ def prepare_dataset(regions: Sequence[str], bulk_pl: str, save_to: str, window_s
 
             if not skip_preflight:
                 if accessible_peaks is not None and os.path.exists(accessible_peaks):
-                    logger.info("Preflight check...")
-                    accessible_regions = pd.read_csv(accessible_peaks, sep="\t", header=None)
-                    to_exclude = preflight_check(
-                        _ct_frag_dict, _tbc, accessible_regions,(bulk_pl, bulk_mn),
-                        max_top_n=max_top_n, preflight_cutoff=preflight_cutoff, nu=nu,
-                        qval_cutoff=candidate_qval, fc_cutoff=candidate_fc, n_aggs=n_aggs,
-                        min_cells_required=min_cells_required, use_qnorm=use_qnorm, save_to=save_to
-                    )
+                    if combine_cell_types is not None:
+                        to_exclude = [slugify(c) for c in combine_cell_types]
+                        collapse_missing_cell_types = True
+                    else:
+                        logger.info("Preflight check...")
+                        accessible_regions = pd.read_csv(accessible_peaks, sep="\t", header=None)
+                        to_exclude = preflight_check(
+                            _ct_frag_dict, _tbc, accessible_regions,(bulk_pl, bulk_mn),
+                            max_top_n=max_top_n, preflight_cutoff=preflight_cutoff, nu=nu,
+                            qval_cutoff=candidate_qval, fc_cutoff=candidate_fc, n_aggs=n_aggs,
+                            min_cells_required=min_cells_required, use_qnorm=use_qnorm, save_to=save_to
+                        )
+
+                    to_be_collapsed = []
                     for c in to_exclude:
-                        logger.warning(f"Cluster {c} is excluded. If you want to keep it, bypass the preflight check.")
+                        if collapse_missing_cell_types:
+                            to_be_collapsed.append((c, _ct_frag_dict[c], _frags_per_ct[c]))
+                            logger.info(f"Preflight suggests {c} may not exist in the bulk, collapsing it into {__DD_OTHERS_MAGIC}...")
+                        else:
+                            logger.warning(f"Cluster {c} is excluded. If you want to keep it, bypass the preflight check.")
                         del _ct_frag_dict[c]
-                        ref_labels.remove(c)
+
+                    # remove these cell types from the ground truth evaluation set
+                    if ref_pls is not None:
+                        ref_labels, ref_pls, ref_mns = zip(*[
+                            (rl, rp, rm)
+                            for rl, rp, rm in zip(ref_labels, ref_pls, ref_mns)
+                            if rl not in to_exclude
+                        ])
+
+                        ref_labels, ref_pls, ref_mns = list(ref_labels), list(ref_pls), list(ref_mns)
+                    else:
+                        for c in to_exclude:
+                            ref_labels.remove(c)
+
+                    # combining scATAC reference and provide empty refs for the combined one to maintain the pipeline
+                    if collapse_missing_cell_types and len(to_be_collapsed) > 0:
+                        new_frag_file = f"{save_to}/{__DD_OTHERS_MAGIC}.fragments.tsv"
+                        n_merged_frags = merge_fragment_files(
+                            [c_config[1] for c_config in to_be_collapsed], new_frag_file
+                        )
+                        _frags_per_ct[__DD_OTHERS_MAGIC] = n_merged_frags
+                        _ct_frag_dict[__DD_OTHERS_MAGIC] = new_frag_file
+
+                        if ref_labels is not None and ref_pls is not None:
+                            if len(ref_pls) > 0:
+                                pl_dest = f"{save_to}/{__DD_OTHERS_MAGIC}.pl.bw"
+                                create_empty_bigwig(ref_pls[0], pl_dest)
+                                ref_pls.append(pl_dest)
+                            if ref_mns is not None and len(ref_mns) > 0:
+                                mn_dest = f"{save_to}/{__DD_OTHERS_MAGIC}.mn.bw"
+                                create_empty_bigwig(ref_mns[0], mn_dest)
+                                ref_mns.append(mn_dest)
+                        ref_labels.append(__DD_OTHERS_MAGIC)
                 else:
                     raise IOError(f"Expecting {accessible_peaks} for preflight check")
 
@@ -612,10 +666,14 @@ def prepare_dataset(regions: Sequence[str], bulk_pl: str, save_to: str, window_s
 
             # save norm factor
             if transformed_norm is not None:
-                if transformed_norm is not None:
+                if not disable_rpm:
                     ds = fh.create_dataset("scatac_norm", data=transformed_norm.to_numpy())
                     for cluster_str, cluster_idx in _mapping.items():
                         ds.attrs[f"c_{cluster_idx}"] = cluster_str
+                else:
+                    logger.info("RPM normalization disabled.")
+            else:
+                logger.info("Normalization factors not calculated.")
 
 
 def merge_rep_preds(in_pred_files: Sequence[str], save_to: str, keep_old: bool = False, quiet: bool = False):
@@ -696,3 +754,56 @@ def merge_rep_preds(in_pred_files: Sequence[str], save_to: str, keep_old: bool =
         logger.info("Removing predictions from replicate runs")
         for f in in_pred_files:
             os.remove(f)
+
+
+def export_attr(checkpoint: str, dataset: str, save_to: str, y_length: int, batch_size: int,
+                device: str = "cuda", chrom_size: Optional[str] = None,
+                hide_progress_bar: bool = False):
+    """
+    Export attribution from the model
+
+    Parameters
+    ----------
+    checkpoint : str
+        {checkpoint}
+    dataset : str
+        {dataset}
+    save_to : str
+        {save_to}
+    y_length : int
+        {y_length}
+    batch_size : int
+        {batch_size}
+    device : str
+        {device}
+    chrom_size : Optional[str]
+        {chrom_size}
+    hide_progress_bar : bool
+        Verbose or quiet
+
+    Returns
+    -------
+
+    """.format(**PARAM_DESC)
+    model = DeepDETAILS.load_from_checkpoint(checkpoint)
+    summarized_model = ModelWithSummarization(model, summarizer="sum").to(device=device)
+
+    raw_ds = SequenceSignalDataset(
+        root=dataset, y_length=y_length, is_training=True, non_background_only=True,
+        chromosomal_val=None, chromosomal_test=None,
+    )
+    dataset = ReducedDataset(raw_ds)
+
+    attr_h5 = ixg(summarized_model, dataset, batch_size=batch_size, save_to=save_to, quiet=hide_progress_bar)
+
+    def validate_aux_opt(x):
+        if x is not None:
+            if os.path.exists(x) and os.path.isfile(x):
+                return True
+        return False
+
+    if validate_aux_opt(dataset.region_file) and validate_aux_opt(chrom_size):
+        for idx in range(raw_ds.n_clusters):
+            write_scores_to_bigwigs(attr_h5, dataset.region_file, idx, os.path.join(save_to, f"C{idx}.bw"), chrom_size)
+    else:
+        logger.info("Skip exporting attribution bigwigs since regions and chrom_size are not available.")
