@@ -17,6 +17,7 @@ class DeepDETAILS(pl.LightningModule):
                  gru_dropout: float = 0.1, profile_kernel_size: int = 75, head_mlp_layers: int = 3,
                  num_tasks: int = 2, first_pass: Optional[bool] = None, redundancy_loss_coef: float = 1.,
                  prior_loss_coef: float = 1., learning_rate: float = 1e-3, version: str = "",
+                 lr_step_size: int = 1, lr_gamma: float = 0.1,
                  scale_function_placement: str = "late-ch", t_x: int = 4096, test_screenshot_ratio: float = 0.002,
                  gamma: float = 1e-8, n_times_more_embeddings: int = 2, betas: Tuple[float, float] = (0.9, 0.999),
                  seq_only: Optional[bool] = False) -> None:
@@ -58,6 +59,10 @@ class DeepDETAILS(pl.LightningModule):
             {prior_loss_coef}
         learning_rate : float
             {learning_rate}
+        lr_step_size : int
+            {lr_step_size}
+        lr_gamma : float
+            {lr_gamma}
         version : str
             {wandb_version}
         scale_function_placement : str
@@ -112,6 +117,8 @@ class DeepDETAILS(pl.LightningModule):
         self.redundancy_loss_coef = redundancy_loss_coef
         self.prior_loss_coef = prior_loss_coef
         self.learning_rate = learning_rate
+        self.lr_step_size = lr_step_size
+        self.lr_gamma = lr_gamma
         self.betas = betas
         self.pearsonr = torchmetrics.PearsonCorrCoef()
         self.val_pearsonr = torchmetrics.PearsonCorrCoef()
@@ -272,5 +279,5 @@ class DeepDETAILS(pl.LightningModule):
 
     def configure_optimizers(self):
         optimizer = torch.optim.Adam(self.parameters(), lr=self.learning_rate, betas=self.betas)
-        lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=1)
+        lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=self.lr_step_size, gamma=self.lr_gamma)
         return [optimizer], [lr_scheduler]

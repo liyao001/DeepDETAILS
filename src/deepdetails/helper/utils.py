@@ -137,15 +137,23 @@ def get_trainer(study_name: str, save_to: str = ".", min_delta: float = 0, early
 
     pass_str = f"_{pass_mark}" if pass_mark else ""
     ver_str = f"{version}{pass_str}" if version else datetime.now().strftime("%y%m%d%H%M%S")
-    wbl = WandbLogger(name=f"{study_name}{pass_str}", project=wandb_project, version=ver_str,
-                      reinit=True, entity=wandb_entity,
-                      log_model=wandb_upload_model, save_dir=save_to, offline=True,
-                      settings=wandb.Settings(start_method="fork"))
-    csvl = CSVLogger(name=f"{study_name}{pass_str}", version=wbl.version, save_dir=save_to,
+    is_multi_gpu = isinstance(devices, list) and len(devices) > 1 and accelerator != "cpu"
+
+    if not is_multi_gpu:
+        wbl = WandbLogger(name=f"{study_name}{pass_str}", project=wandb_project, version=ver_str,
+                          reinit=True, entity=wandb_entity,
+                          log_model=wandb_upload_model, save_dir=save_to, offline=True,
+                          settings=wandb.Settings(start_method="fork"))
+        ver = str(wbl.version)
+    else:
+        wbl = None
+        ver = ver_str
+
+    csvl = CSVLogger(name=f"{study_name}{pass_str}", version=ver, save_dir=save_to,
                      prefix=f"{study_name}{pass_str}")
 
     checkpoint_callback = ModelCheckpoint(monitor=training_readout, save_top_k=save_top_k_model,
-                                          dirpath=os.path.join(save_to, study_name, str(wbl.version)))
+                                          dirpath=os.path.join(save_to, study_name, ver))
     early_stop_callback = EarlyStopping(
         monitor=training_readout, min_delta=min_delta,
         patience=earlystop_patience, verbose=True, mode="min"
@@ -156,14 +164,14 @@ def get_trainer(study_name: str, save_to: str = ".", min_delta: float = 0, early
     if accelerator == "cpu" and isinstance(devices, list):
         devices = devices[0]
     trainer_obj = pl.Trainer(
-        logger=[wbl, csvl],
+        logger=[wbl, csvl] if wbl is not None else [csvl],
         enable_checkpointing=True,
         max_epochs=max_epochs,
         accelerator=accelerator, devices=devices,
         callbacks=callbacks,
         enable_progress_bar=False if hide_progress_bar else True
     )
-    return trainer_obj, wbl.version
+    return trainer_obj, ver
 
 
 def internal_qc(metrics: list[float], pred_counts: torch.Tensor):
@@ -431,7 +439,7 @@ def bedgraph_to_bigwig(in_bedgraph_path: str, out_bigwig_path: str, chrom_size_p
             run_command(cmd1, raise_exception=True)
             cmd = f"bedGraphToBigWig {in_bedgraph_path}.sorted {chrom_size_path} {out_bigwig_path}"
             run_command(cmd, raise_exception=True)
-            os.remove(f"rm {in_bedgraph_path}.sorted")
+            os.remove(f"{in_bedgraph_path}.sorted")
         else:
             raise e
 

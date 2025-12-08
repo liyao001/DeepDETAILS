@@ -84,6 +84,15 @@ You should be able to see deconvolved signal tracks for each cell type
 (named like `cell_type.pl.bw` / `cell_type.mn.bw`) 
 in the output directory after the command finishes.
 
+### Step 4: Visualize sequence attributions (optional)
+This step exports sequence attribution tracks from trained DeepDETAILS models (using Input X Gradient):
+
+```shell
+deepdetails attr \
+  -m sample-a/250212144109/epoch=0-step=2538.ckpt \
+  --dataset ./dataset \
+  --chrom-size chrNameLength.txt
+```
 
 ## Reference
 > Yao, L. et al. High-resolution reconstruction of cell-type specific transcriptional regulatory processes from bulk sequencing samples. [Preprint at bioRxiv](https://doi.org/10.1101/2025.04.02.646189) (2025).

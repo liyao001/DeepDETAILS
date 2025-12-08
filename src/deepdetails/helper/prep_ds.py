@@ -1,6 +1,7 @@
 import gzip
-import os
 import h5py
+import logging
+import os
 import pybedtools
 import pyBigWig
 import numpy as np
@@ -10,6 +11,9 @@ from tqdm import tqdm
 from deepdetails.__about__ import __version__
 from deepdetails.par_description import PARAM_DESC
 from deepdetails.helper.utils import slugify, set_tmp_for_pbt, bedgraph_to_bigwig
+
+logger = logging.getLogger(__name__)
+logging.basicConfig(format="%(levelname)s | %(asctime)s | %(message)s", level=logging.INFO)
 
 
 def _midpoint_generator(bed_regions: pybedtools.BedTool):
@@ -28,7 +32,7 @@ def _midpoint_generator(bed_regions: pybedtools.BedTool):
         for region in bed_regions:
             yield midpoint(region)
     except Exception as e:
-        print(e)
+        logger.warning(e)
 
 
 def extend_regions_from_mid_points(region: Union[str, pybedtools.BedTool, pd.DataFrame],
@@ -249,7 +253,7 @@ def generate_gc_matched_random_regions(
             plt.savefig(dist_compare_plot_file, dpi=200)
             plt.close()
         except Exception as e:
-            print(e)
+            logger.warning(e)
     sampled_results.columns = (0, 1, 2, 3)
     return sampled_results
 
@@ -298,6 +302,42 @@ def seq_to_one_hot(x: str, non_standard_as_zero: bool = False) -> np.ndarray:
     return mat
 
 
+def retrieve_values_from_bw(bw, chrom, start, end):
+    """
+    Retrieve signal values from a pyBigWig object for a given genomic interval.
+
+    This function extracts signal values from a BigWig file using the pyBigWig API,
+    replacing any NaN values with 0. If a RuntimeError occurs (e.g., due to an
+    invalid chromosome or out-of-bounds interval), the function logs a warning and
+    returns a zero-filled array of appropriate length.
+
+    Parameters
+    ----------
+    bw : pyBigWig.pyBigWig
+        An open pyBigWig object from which signal values will be extracted.
+    chrom : str
+        Chromosome name (e.g., 'chr1', 'chrX').
+    start : int
+        Start coordinate of the genomic interval (0-based, inclusive).
+    end : int
+        End coordinate of the genomic interval (0-based, exclusive).
+
+    Returns
+    -------
+    values : np.ndarray
+        A NumPy array of signal values for the specified region. NaNs are replaced
+        with 0. If an error occurs, an array of zeros with length (end - start) is returned.
+    """
+    try:
+        values = np.nan_to_num(
+            bw.values(chrom, start, end, numpy=True)
+        )
+    except RuntimeError as e:
+        logger.warning("Runtime error: {} when accessing data at {}:{}-{}".format(e, chrom, start, end))
+        values = np.zeros(end - start)
+    return values
+
+
 def extract_signal_from_bw(bw_obj: pyBigWig.pyBigWig, chrom: str, start: int, end: int,
                            apply_abs: bool = True, sliding_sum: int = 0) -> np.ndarray:
     """
@@ -328,14 +368,10 @@ def extract_signal_from_bw(bw_obj: pyBigWig.pyBigWig, chrom: str, start: int, en
         # we have identical number of observations as end - start
         signal_shifting = sliding_sum - 1
         values = np.lib.stride_tricks.sliding_window_view(
-            np.nan_to_num(
-                bw_obj.values(chrom, start - signal_shifting, end, numpy=True)
-            ),
+            retrieve_values_from_bw(bw_obj, chrom, start - signal_shifting, end),
             sliding_sum).sum(axis=-1)
     else:
-        values = np.nan_to_num(
-            bw_obj.values(chrom, start, end, numpy=True)
-        )
+        values = retrieve_values_from_bw(bw_obj, chrom, start, end)
 
     return np.abs(values) if apply_abs else values
 
@@ -688,11 +724,11 @@ def convert_bulk_frags_to_ct_frags(fragments_file: str, barcode_file: str, save_
     if barcodes.shape[1] != 2:
         raise ValueError("barcode_file should have 2 columns: the cell barcode and cell type annotation")
     cell_types = sorted(barcodes[1].unique().tolist())
-    print(f"Cell types in the barcode file: {cell_types}")
+    logger.info(f"Cell types in the barcode file: {cell_types}")
     safe_cell_types_mapping = {ct: slugify(ct) for ct in cell_types}
     if reference_labels is not None:
         safe_ref_labels = [slugify(r) for r in reference_labels]
-        if safe_ref_labels != set(safe_cell_types_mapping.values()):
+        if set(safe_ref_labels) != set(safe_cell_types_mapping.values()):
             raise ValueError("Reference labels provided do not match cell types")
         cell_types = reference_labels
         safe_cell_types_mapping = {ct: slugify(ct) for ct in cell_types}
@@ -702,7 +738,7 @@ def convert_bulk_frags_to_ct_frags(fragments_file: str, barcode_file: str, save_
     bc_to_ct = barcodes.set_index(0).to_dict()[2]
     out_files = {ct: f"{save_to}/{ct}.fragments.tsv" for ct in safe_cell_types_mapping.values()}
 
-    print("Generating pseudo-bulk fragment files based on their source cell type / cluster...")
+    logger.info("Generating pseudo-bulk fragment files based on their source cell type / cluster...")
     frags_per_ct = {ct: 0 for ct in safe_cell_types_mapping.values()}
     if memory_saving:
         frag_file_handles = {ct: open(f"{save_to}/{ct}.fragments.tsv", "w") for ct in out_files.keys()}
@@ -737,11 +773,63 @@ def convert_bulk_frags_to_ct_frags(fragments_file: str, barcode_file: str, save_
             frags_per_ct[ct] = sdf.shape[0]
             columns = sdf.columns
             # no need to save the cell type label
-            sdf[columns[:-1]].to_csv(out_files[ct], sep="\t", index=False)
-    print(
+            sdf[columns[:-1]].to_csv(out_files[ct], sep="\t", index=False, header=False)
+    logger.info(
         f"{total_frags - missing_frags} / {total_frags} fragments can be associated to provided cell type annotations")
-    print("Finished generating pseudo-bulk fragment files based on their source cell type / cluster...")
+    logger.info("Finished generating pseudo-bulk fragment files based on their source cell type / cluster...")
 
     tbc = barcodes[[0, 2]].copy()
     tbc.columns = (0, 1)
     return out_files, frags_per_ct, safe_cell_types, tbc
+
+
+def merge_fragment_files(in_frags: list[str], save_to: str) -> int:
+    """
+    Merge multiple fragment files into a single fragment file.
+    Parameters
+    ----------
+    in_frags : list[str]
+        list of paths to the fragment files
+    save_to : str
+        full name of the output file
+
+    Returns
+    -------
+    n_frags : int
+        number of total fragments in the merged file
+    """
+    sub_dfs = [pd.read_csv(f, sep="\t", header=None, comment="#") for f in in_frags]
+    merged_fragments = pd.concat(sub_dfs, ignore_index=True).sort_values([0, 1]).reset_index(drop=True)
+    merged_fragments.to_csv(save_to, sep="\t", index=False, header=False)
+
+    return merged_fragments.shape[0]
+
+
+def create_empty_bigwig(input_bw_path: str, output_bw_path: str, value: float = 0.):
+    """
+    Create a new BigWig file with zeros across all chromosomes based on an input BigWig file.
+
+    Parameters
+    ----------
+    input_bw_path : str
+        Path to the input BigWig file (used for chromosome sizes).
+    output_bw_path : str
+        Path to the output BigWig file with zeros.
+    value : float, optional
+        Placeholder value in the new file
+
+    Returns
+    -------
+
+    """
+    # open the input BigWig to read chromosome sizes
+    with pyBigWig.open(input_bw_path) as bw:
+        chroms = bw.chroms()  # Dictionary: {chrom: length}
+
+    # create a new BigWig file
+    with pyBigWig.open(output_bw_path, "w") as out_bw:
+        out_bw.addHeader(list(chroms.items()))
+
+        for chrom, length in chroms.items():
+            # Single 0-value region covering the entire chromosome
+            out_bw.addEntries([chrom], [0], ends=[length], values=[value])

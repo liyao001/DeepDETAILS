@@ -23,7 +23,7 @@ class DeconvolutionTestCase(unittest.TestCase):
                     wandb_upload_model=False, profile_shrinkage=8, filters=128, n_non_dil_layers=1,
                     non_dil_kernel_size=3, n_dilated_layers=9, dil_kernel_size=4, head_layers=1,
                     conv1_kernel_size=21, gru_layers=1, gru_dropout=0.1, profile_kernel_size=9,
-                    redundancy_loss_coef=1., prior_loss_coef=1., rescaling_mode=1,
+                    redundancy_loss_coef=1., prior_loss_coef=1., rescaling_mode=1, lr_step_size=1, lr_gamma=0.1,
                     scale_function_placement="late-ch", learning_rate=0.001, betas=(0.9, 0.999),
                     all_regions=False, test_pos_only=True, cv=None, ct=None, max_retry=1,
                     seq_only=seq_only

@@ -14,7 +14,7 @@ PARAM_DESC = {
     "gamma": "This small scalar is applied to the injected linear pattern in calculating redundancy "
              "reduction terms for preventing trivial solutions.",
     "save_preds": "Set this switch to save final predictions. Specify --no-preds if you don't want to save predictions.",
-    "no_preds": "Do not export predictions.",
+    "resume_from_ckpt": "Path of the checkpoint from which deconvolution is resumed.",
     "all_regions": "Train models with both peak and background regions. This is the default behavior. "
                    "Specify --peak-only if you want to only use peak regions",
     "peak_only": "Train models with peak regions only.",
@@ -23,6 +23,7 @@ PARAM_DESC = {
     "chromosomal_validation": "Chromosomes kept for validation. Only effective when chrom_cv is specified.",
     "chromosomal_testing": "Chromosomes kept for testing. Only effective when chrom_cv is specified.",
     "test_screenshot_ratio": "Ratio of screenshots across batches",
+    "no_preds": "Do not export predictions.",
     # parameters for the dataset
     "regions": "Peak regions. Multiple files allowed.",
     "bulk_pl": "Bulk signal for the forward strand.",
@@ -48,6 +49,7 @@ PARAM_DESC = {
     "loads_trunc": "Whether to set separate truncation value for calculating loads. If None, y_truncation will be used.",
     "keep_frags": "Keep extracted fragments for each cell type/cluster",
     "skip_preflight": "Skip checking clusters in the snATAC experiment that may not present in the bulk library",
+    "disable_rpm": "Disable using RPM factor to normalize the sc/snATAC tracks",
     "accessible_peaks": "Accessible regions identified from the snATAC experiment.",
     "memory_saving": "Try to use solutions that more memory friendly.",
     "preflight_nu": "nu for NuSVR, see sklearn's documentation for more information. Range: [0., 1.]",
@@ -58,6 +60,9 @@ PARAM_DESC = {
     "max_top_n": "Maximum number of signature candidates to consider for each cluster",
     "qval_cutoff": "Q-value cutoff for a region to be considered a signature",
     "fc_cutoff": "Fold-change cutoff for a region to be considered a signature",
+    "collapse_missing_cell_types": "Enable the option to group cell types that are present in the reference but not "
+                                   "found in the bulk (as determined by preflight check) into a separate category called 'Others.'",
+    "combine_cell_types": "Combine the following cell types into others. This will enable `collapse_missing_cell_types`",
     # parameters for a dynamic dataset
     "fa_file": "Genome fasta file, should have a companion index file (.fai)",
     "sc_norm_file": "Path to a CSV file with two columns: cluster name and normalization factor. No header, no index.",
@@ -96,6 +101,8 @@ PARAM_DESC = {
                           "Under the default configuration, one check happens after every training epoch.",
     "max_epochs": "Stop training once this number of epochs is reached.",
     "learning_rate": "Learning rate",
+    "lr_step_size": "Period of learning rate decay",
+    "lr_gamma": "Multiplicative factor of learning rate decay. Default: 0.1.",
     "betas": "Coefficients used for computing running averages of gradient and its square",
     "save_top_k_model": "The best k models according to the quantity monitored will be saved. "
                         "If k == 0, no models are saved. If k == -1, all models are saved.",
