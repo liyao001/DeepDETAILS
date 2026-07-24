@@ -1,13 +1,15 @@
 import os
+from typing import Optional, Sequence
+
 import h5py
+import numpy as np
+import pandas as pd
 import pyBigWig
 import pyfaidx
 import torch
-import numpy as np
-import pandas as pd
-from typing import Sequence, Optional
 from torch.utils.data import Dataset
-from deepdetails.helper.prep_ds import seq_to_one_hot, extract_signal_from_bw
+
+from deepdetails.helper.prep_ds import extract_signal_from_bw, seq_to_one_hot
 from deepdetails.par_description import PARAM_DESC
 
 
@@ -27,7 +29,8 @@ def parse_regions(hdf5_handle: h5py.File) -> pd.DataFrame:
     region_df : pd.DataFrame
         Region dataframe
     """
-    assert "regions" in hdf5_handle
+    if "regions" not in hdf5_handle:
+        raise KeyError("HDF5 file is missing required dataset 'regions'")
     df = pd.DataFrame(hdf5_handle["regions"][:])
     _chr_mapping = {}
     for k, v in hdf5_handle["regions"].attrs.items():
@@ -82,16 +85,22 @@ class SequenceSignalDataset(Dataset):
 
         """.format(**PARAM_DESC)
         self.expected_data_file = os.path.join(root, "data.h5")
-        assert os.path.exists(self.expected_data_file)
+        if not os.path.exists(self.expected_data_file):
+            raise FileNotFoundError(f"Expected dataset file not found: {self.expected_data_file}")
         self.dataset_h5 = None
         self.dataset = None
         self.load_groundtruth = False
         self.has_acc_norm = False
         self.prior = torch.tensor(0)
+        self.transcripts = None
+        self.genes = None
+        self.strands = None
 
         with h5py.File(self.expected_data_file, "r") as fh:
-            assert "dec" in fh
-            assert "regions" in fh
+            if "dec" not in fh:
+                raise KeyError(f"{self.expected_data_file} is missing required group 'dec'")
+            if "regions" not in fh:
+                raise KeyError(f"{self.expected_data_file} is missing required dataset 'regions'")
             self.df = parse_regions(fh)
 
             self.n_targets = fh["dec"].attrs["n_targets"]
@@ -320,27 +329,38 @@ class DynamicDataset(Dataset):
         ValueError
 
         """.format(**PARAM_DESC)
-        assert os.path.exists(pl_bulk_bw_file)
+        if not os.path.exists(pl_bulk_bw_file):
+            raise FileNotFoundError(f"Bulk forward-strand BigWig not found: {pl_bulk_bw_file}")
         self.pl_bulk_bw_file = pl_bulk_bw_file
         if mn_bulk_bw_file is not None:
-            assert os.path.exists(mn_bulk_bw_file)
+            if not os.path.exists(mn_bulk_bw_file):
+                raise FileNotFoundError(f"Bulk reverse-strand BigWig not found: {mn_bulk_bw_file}")
         self.mn_bulk_bw_file = mn_bulk_bw_file
 
-        assert os.path.exists(fa_file)
+        if not os.path.exists(fa_file):
+            raise FileNotFoundError(f"Genome FASTA not found: {fa_file}")
         self.fa_file = fa_file
 
-        assert all([os.path.exists(f) for f in acc_bw_files])
+        missing_acc_files = [f for f in acc_bw_files if not os.path.exists(f)]
+        if missing_acc_files:
+            raise FileNotFoundError(f"Accessibility BigWig file(s) not found: {missing_acc_files}")
         self.acc_bw_files = acc_bw_files
 
-        assert os.path.exists(regions_file)
+        if not os.path.exists(regions_file):
+            raise FileNotFoundError(f"Regions file not found: {regions_file}")
         self.df = pd.read_csv(regions_file, header=None, comment="#")
 
+        self.load_groundtruth = False
         if pl_ct_bw_files is not None:
-            assert all([os.path.exists(f) for f in pl_ct_bw_files])
+            missing_pl_ct_files = [f for f in pl_ct_bw_files if not os.path.exists(f)]
+            if missing_pl_ct_files:
+                raise FileNotFoundError(f"Reference forward-strand BigWig file(s) not found: {missing_pl_ct_files}")
             self.load_groundtruth = True
         self.pl_ct_bw_files = pl_ct_bw_files
         if mn_ct_bw_files is not None:
-            assert all([os.path.exists(f) for f in mn_ct_bw_files])
+            missing_mn_ct_files = [f for f in mn_ct_bw_files if not os.path.exists(f)]
+            if missing_mn_ct_files:
+                raise FileNotFoundError(f"Reference reverse-strand BigWig file(s) not found: {missing_mn_ct_files}")
         self.mn_ct_bw_files = mn_ct_bw_files
 
         self.fa_obj = None
@@ -353,7 +373,6 @@ class DynamicDataset(Dataset):
 
         self.sliding_sum = target_sliding_sum
 
-        self.load_groundtruth = False
         self.has_acc_norm = False
         self.prior = torch.tensor(0)
 
@@ -449,7 +468,8 @@ class DynamicDataset(Dataset):
         bulk_signal = self.df.apply(lambda x: sum([DynamicDataset.safe_sum(b, x) for b in bulk_bws]), axis=1)
         self.df.loc[bulk_signal == 0, 3] = 0
 
-        for bw in bulk_bws: bw.close()
+        for bw in bulk_bws:
+            bw.close()
 
     def get_weights(self, observations: torch.Tensor, small: float = 1e-16):
         safe_observations = small + observations

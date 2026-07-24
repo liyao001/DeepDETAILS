@@ -1,9 +1,9 @@
 import os
-import shutil
+
 import h5py
 import numpy as np
-from deepdetails.data import parse_regions
 
+from deepdetails.data import parse_regions
 
 STRAND_LABELS = ("pl", "mn")
 STRAND_COEFF = (1, -1)
@@ -81,11 +81,6 @@ def bg_to_bw_core(bg_file: str, prefix: str, chrom_size: str, coef: int = 1, ski
     """
     _house_keeping = []
     _house_keeping.append(bg_file)
-    dependent_tools = ("sort", "bedtools", "bedGraphToBigWig")
-    for tool in dependent_tools:
-        full_path = shutil.which(tool)
-        if full_path is None:
-            raise RuntimeError(f"Required tool {tool} is not callable, please make sure it's in your PATH.")
 
     dest_bg = f"{prefix}.bedGraph"
     _house_keeping.append(dest_bg)
@@ -108,5 +103,6 @@ def bg_to_bw_core(bg_file: str, prefix: str, chrom_size: str, coef: int = 1, ski
     os.system(cmd)
 
     # clean up
-    for f in _house_keeping: os.system(f"rm {f}")
+    for f in _house_keeping:
+        os.system(f"rm {f}")
     return dest_bw

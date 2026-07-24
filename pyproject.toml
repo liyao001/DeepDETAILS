@@ -1,5 +1,5 @@
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling", "hatch-vcs"]
 build-backend = "hatchling.build"
 
 [project]
@@ -7,7 +7,7 @@ name = "DeepDETAILS"
 dynamic = ["version"]
 description = "Deep-learning-based DEconvolution of Tissue profiles with Accurate Interpretation of Locus-specific Signals"
 readme = "README.md"
-requires-python = ">=3.8"
+requires-python = ">=3.10"
 license = "GPL-3.0-or-later"
 keywords = []
 authors = [
@@ -16,11 +16,10 @@ authors = [
 classifiers = [
   "Development Status :: 3 - Alpha",
   "Programming Language :: Python",
-  "Programming Language :: Python :: 3.8",
-  "Programming Language :: Python :: 3.9",
   "Programming Language :: Python :: 3.10",
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
   "Programming Language :: Python :: Implementation :: CPython",
   "Programming Language :: Python :: Implementation :: PyPy",
 ]
@@ -32,6 +31,18 @@ dependencies = [
   "scipy>=1.11.1", "wandb"
 ]
 
+[project.optional-dependencies]
+dev = [
+  "coverage[toml]>=6.5",
+  "pytest",
+  "pytest-testmon",
+  "pytest-xdist",
+  "pylint",
+  "ruff",
+  "twine",
+  "vulture",
+]
+
 [project.scripts]
 deepdetails = "deepdetails.cli:deepdetails"
 
@@ -41,16 +52,29 @@ Issues = "https://github.com/liyao001/DeepDETAILS/issues"
 Source = "https://github.com/liyao001/DeepDETAILS"
 
 [tool.hatch.version]
-path = "src/deepdetails/__about__.py"
+source = "vcs"
+fallback-version = "0.0.0"
+
+[tool.hatch.version.raw-options]
+# Historical tags like 0.1.0dev4 yield non-PEP-440 versions when combined with
+# distance metadata; ignore them and use clean numeric release tags instead.
+version_scheme = "post-release"
+git_describe_command = "git describe --dirty --tags --long --match [0-9]* --match v[0-9]* --exclude *dev*"
+
+[tool.hatch.build.hooks.vcs]
+version-file = "src/deepdetails/_version.py"
 
 [tool.hatch.envs.default]
-dependencies = [
-  "coverage[toml]>=6.5",
-  "pytest",
-]
+features = ["dev"]
 [tool.hatch.envs.default.scripts]
 test = "pytest {args:tests}"
+test-data = "pytest -m data {args:tests}"
+test-fast = "pytest -m 'not train and not gpu' {args:tests}"
+test-train = "pytest -m train {args:tests}"
+test-unit = "pytest -m unit {args:tests}"
 test-cov = "coverage run -m pytest {args:tests}"
+lint = "ruff check {args:.}"
+check-dist = "twine check {args:dist/*}"
 cov-report = [
   "- coverage combine",
   "coverage report",
@@ -61,7 +85,7 @@ cov = [
 ]
 
 [[tool.hatch.envs.all.matrix]]
-python = ["3.8", "3.9", "3.10", "3.11", "3.12"]
+python = ["3.10", "3.11", "3.12", "3.13"]
 
 [tool.hatch.envs.types]
 dependencies = [
@@ -76,6 +100,7 @@ branch = true
 parallel = true
 omit = [
   "src/deepdetails/__about__.py",
+  "src/deepdetails/_version.py",
 ]
 
 [tool.coverage.paths]
@@ -88,3 +113,26 @@ exclude_lines = [
   "if __name__ == .__main__.:",
   "if TYPE_CHECKING:",
 ]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+markers = [
+  "data: tests that require bundled genomics fixture files and external bioinformatics libraries",
+  "gpu: tests that require GPU hardware",
+  "train: tests that exercise model training or trainer orchestration",
+  "unit: fast tests for isolated Python logic",
+]
+
+[tool.ruff]
+target-version = "py310"
+extend-exclude = [
+  ".vulture_whitelist.py",
+  "dist",
+  "scripts",
+  "tests",
+  "wandb",
+]
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I"]

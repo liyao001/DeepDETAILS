@@ -1,7 +1,9 @@
 import os
-import torch
-import matplotlib.pyplot as plt
 from typing import Union
+
+import matplotlib.pyplot as plt
+import torch
+
 from deepdetails.helper.utils import get_log_dir
 
 

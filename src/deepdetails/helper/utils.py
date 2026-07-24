@@ -1,66 +1,103 @@
+import json
+import logging
 import os
 import re
+import shlex
+import shutil
+import subprocess
 import unicodedata
+from datetime import datetime
+from typing import List, Optional, Sequence, Tuple, Union
+from urllib.request import urlopen
+
+import numpy as np
 import pybedtools
+import pytorch_lightning as pl
 import torch
 import wandb
-import numpy as np
-import pytorch_lightning as pl
-from datetime import datetime
-from subprocess import Popen, PIPE
-from typing import Tuple, List, Optional, Union, Sequence
 from pytorch_lightning import loggers
-from pytorch_lightning.loggers import CSVLogger, WandbLogger
 from pytorch_lightning.callbacks import ModelCheckpoint, ModelSummary
 from pytorch_lightning.callbacks.early_stopping import EarlyStopping
+from pytorch_lightning.loggers import CSVLogger, WandbLogger
+
 from deepdetails.par_description import PARAM_DESC
 
+REQUIRED_BINARIES = ("bedtools", "bedGraphToBigWig", "sort")
+_PYPI_JSON_URL = "https://pypi.org/pypi/DeepDETAILS/json"
+_CONDA_UPDATE_CMD = "conda update -c bioconda -c conda-forge deepdetails"
+_PIP_UPDATE_CMD = "pip install -U DeepDETAILS"
 
-def is_valid_file(arg: str, is_dir: bool = False, create_dir: bool = False) -> str:
-    """Check if the value points to a valid file / directory
+logger = logging.getLogger(__name__)
 
-    Parameters
-    ----------
-    arg : str
-        Value of the option
-    is_dir : bool
-        Value should be a directory
-    create_dir : bool
-        Create the directory if it does not exist
 
-    Returns
-    -------
-    arg : str
-        Option's value if it points to a valid file
-    Examples
-    --------
-    For CLI options that should be pointing to files
+def require_external_binaries() -> None:
+    """Raise ``RuntimeError`` if any required external tool is missing from ``PATH``."""
+    missing = [tool for tool in REQUIRED_BINARIES if shutil.which(tool) is None]
+    if missing:
+        raise RuntimeError(
+            "Required external tool(s) not found on PATH: "
+            f"{', '.join(missing)}. Install them and ensure they are callable "
+            "before re-running."
+        )
 
-    >>> import argparse
-    >>> test_parser = argparse.ArgumentParser()
-    >>> test_parser.add_argument("input_file", type=lambda x: is_valid_file(x))
+
+def check_update(timeout: float = 5.0) -> None:
+    """Compare the installed version against the latest PyPI release.
+
+    Network failures are logged and ignored so offline / CI use is unaffected.
+    Set ``DEEPDETAILS_SKIP_UPDATE_CHECK=1`` to skip this check.
     """
-    checks = (os.path.isfile(arg), os.path.isdir(arg))
-    if not is_dir and not checks[0]:
-        raise IOError('The file {} does not exist!'.format(arg))
-    elif is_dir and not checks[1]:
-        if create_dir:
-            try:
-                os.makedirs(arg, exist_ok=True)
-            except Exception:
-                raise IOError('The directory {} does not exist and cannot be created!'.format(arg))
+    if os.environ.get("DEEPDETAILS_SKIP_UPDATE_CHECK", "").strip().lower() in {
+        "1", "true", "yes",
+    }:
+        return
+
+    try:
+        from deepdetails.__about__ import __version__ as local_version
+
+        with urlopen(_PYPI_JSON_URL, timeout=timeout) as response:
+            remote_version = json.loads(response.read().decode()).get("info", {}).get("version")
+        if not remote_version:
+            return
+
+        local_base = local_version.split("+", 1)[0]
+        if local_base == remote_version:
+            logger.info("You are using the latest DeepDETAILS release (%s)", local_base)
+            return
+
+        try:
+            from packaging.version import Version
+
+            outdated = Version(local_base) < Version(remote_version)
+        except Exception:
+            outdated = True
+
+        if outdated:
+            logger.warning(
+                "Your DeepDETAILS version is out of date (%s vs. %s). "
+                "Update with conda (recommended): `%s`. "
+                "Or with pip: `%s`.",
+                local_base,
+                remote_version,
+                _CONDA_UPDATE_CMD,
+                _PIP_UPDATE_CMD,
+            )
         else:
-            raise IOError('The directory {} does not exist!'.format(arg))
-    # File/directory exists so return the name
-    return arg
+            logger.info(
+                "Installed DeepDETAILS (%s) is newer than the latest PyPI release (%s)",
+                local_base,
+                remote_version,
+            )
+    except Exception as exc:
+        logger.debug("Skipping update check: %s", exc)
 
 
-def run_command(cmd: str, raise_exception: bool = False):
+def run_command(cmd: Union[str, Sequence[str]], raise_exception: bool = False):
     """Run command
 
     Parameters
     ----------
-    cmd : str
+    cmd : Union[str, Sequence[str]]
 
     raise_exception : bool
         Raise an exception if the return code is not 0.
@@ -74,13 +111,17 @@ def run_command(cmd: str, raise_exception: bool = False):
     return_code : int
 
     """
-    with Popen(cmd, shell=True, stderr=PIPE, stdout=PIPE) as p:
-        stdout, stderr = p.communicate()
-        stderr = stderr.decode("utf-8")
-        stdout = stdout.decode("utf-8")
-    if raise_exception and p.returncode != 0:
-        raise RuntimeError(stderr)
-    return stdout, stderr, p.returncode
+    argv = shlex.split(cmd) if isinstance(cmd, str) else list(cmd)
+    proc = subprocess.run(
+        argv,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        check=False,
+    )
+    if raise_exception and proc.returncode != 0:
+        raise RuntimeError(proc.stderr)
+    return proc.stdout, proc.stderr, proc.returncode
 
 
 def get_trainer(study_name: str, save_to: str = ".", min_delta: float = 0, earlystop_patience: int = 3,
@@ -137,6 +178,12 @@ def get_trainer(study_name: str, save_to: str = ".", min_delta: float = 0, early
 
     pass_str = f"_{pass_mark}" if pass_mark else ""
     ver_str = f"{version}{pass_str}" if version else datetime.now().strftime("%y%m%d%H%M%S")
+
+    # CPUAccelerator expects `devices` to be a plain positive int, not a list.
+    is_cpu_accelerator = accelerator == "cpu" or (accelerator == "auto" and not torch.cuda.is_available())
+    if is_cpu_accelerator and isinstance(devices, list):
+        devices = max(len(devices), 1)
+
     is_multi_gpu = isinstance(devices, list) and len(devices) > 1 and accelerator != "cpu"
 
     if not is_multi_gpu:
@@ -161,8 +208,6 @@ def get_trainer(study_name: str, save_to: str = ".", min_delta: float = 0, early
     callbacks = [early_stop_callback,
                  checkpoint_callback,
                  ModelSummary(max_depth=model_summary_depth),]
-    if accelerator == "cpu" and isinstance(devices, list):
-        devices = devices[0]
     trainer_obj = pl.Trainer(
         logger=[wbl, csvl] if wbl is not None else [csvl],
         enable_checkpointing=True,
@@ -323,7 +368,7 @@ def get_log_dir(logger: loggers.Logger):
         else:
             log_dir = "."
             version = ""
-    except:
+    except Exception:
         log_dir = "."
         version = ""
     return log_dir, version
@@ -357,7 +402,7 @@ def slugify(value: str, allow_unicode: bool = False) -> str:
 
         1. Converting to ASCII if `allow_unicode` is False (the default).
         2. Converting to lowercase.
-        3. Removing characters that aren't alphanumerics, underscores, hyphens, or whitespace.
+        3. Removing characters that aren’t alphanumerics, underscores, hyphens, or whitespace.
         4. Replacing any whitespace or repeated dashes with single dashes.
         5. Removing leading and trailing whitespace, dashes, and underscores.
     Parameters
@@ -431,15 +476,25 @@ def bedgraph_to_bigwig(in_bedgraph_path: str, out_bigwig_path: str, chrom_size_p
 
     # convert the filtered bedGraph file into bigWig format
     try:
-        cmd = f"bedGraphToBigWig {in_bedgraph_path} {chrom_size_path} {out_bigwig_path}"
-        run_command(cmd, raise_exception=True)
+        run_command(["bedGraphToBigWig", tmp_file, chrom_size_path, out_bigwig_path], raise_exception=True)
     except RuntimeError as e:
         if str(e).find("not case-sensitive sorted") != -1:
-            cmd1 = f"sort -k1,1 -k2,2n {in_bedgraph_path} > {in_bedgraph_path}.sorted"
-            run_command(cmd1, raise_exception=True)
-            cmd = f"bedGraphToBigWig {in_bedgraph_path}.sorted {chrom_size_path} {out_bigwig_path}"
-            run_command(cmd, raise_exception=True)
-            os.remove(f"{in_bedgraph_path}.sorted")
+            sorted_file = f"{tmp_file}.sorted"
+            with open(sorted_file, "w") as sorted_output:
+                proc = subprocess.run(
+                    ["sort", "-k1,1", "-k2,2n", tmp_file],
+                    stdout=sorted_output,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    check=False,
+                )
+            if proc.returncode != 0:
+                raise RuntimeError(proc.stderr) from e
+            try:
+                run_command(["bedGraphToBigWig", sorted_file, chrom_size_path, out_bigwig_path], raise_exception=True)
+            finally:
+                if os.path.exists(sorted_file):
+                    os.remove(sorted_file)
         else:
             raise e
 

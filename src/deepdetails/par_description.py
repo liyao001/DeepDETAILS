@@ -1,3 +1,32 @@
+from enum import IntEnum
+
+
+class RescalingMode(IntEnum):
+    NONE = 0
+    COUNTS = 1
+    BP = 2
+
+    @property
+    def description(self) -> str:
+        return {
+            RescalingMode.NONE: "No rescaling",
+            RescalingMode.COUNTS: "Counts-level rescaling",
+            RescalingMode.BP: "BP-level rescaling",
+        }[self]
+
+    @classmethod
+    def parse(cls, value: str) -> "RescalingMode":
+        return cls(int(value))
+
+    @classmethod
+    def values(cls) -> tuple:
+        return tuple(mode.value for mode in cls)
+
+    @classmethod
+    def help_text(cls) -> str:
+        return ", ".join(f"{mode.value}: {mode.description}" for mode in cls)
+
+
 PARAM_DESC = {
     "dataset": "Path to the dataset folder",
     "expected_clusters": "Number of expected clusters/cell types in the bulk sample.",
@@ -10,7 +39,7 @@ PARAM_DESC = {
     "prior_loss_coef": "Prior loss coefficient",
     "disable_final_rescaling": "By default, DETAILS adjusts the final exported predictions so they have scales identical"
                                " to the bulk library. By setting this switch, you can disable this adjustment.",
-    "rescaling_mode": "0: No rescaling, 1: Counts-level rescaling, 2: BP-level rescaling",
+    "rescaling_mode": RescalingMode.help_text(),
     "gamma": "This small scalar is applied to the injected linear pattern in calculating redundancy "
              "reduction terms for preventing trivial solutions.",
     "save_preds": "Set this switch to save final predictions. Specify --no-preds if you don't want to save predictions.",

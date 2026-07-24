@@ -1,16 +1,18 @@
 import gzip
-import h5py
 import logging
 import os
-import pybedtools
-import pyBigWig
+from typing import List, Optional, Sequence, Tuple, Union
+
+import h5py
 import numpy as np
 import pandas as pd
-from typing import Tuple, Union, Optional, List, Sequence
+import pybedtools
+import pyBigWig
 from tqdm import tqdm
+
 from deepdetails.__about__ import __version__
+from deepdetails.helper.utils import bedgraph_to_bigwig, set_tmp_for_pbt, slugify
 from deepdetails.par_description import PARAM_DESC
-from deepdetails.helper.utils import slugify, set_tmp_for_pbt, bedgraph_to_bigwig
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(format="%(levelname)s | %(asctime)s | %(message)s", level=logging.INFO)
@@ -156,7 +158,6 @@ def generate_gc_matched_random_regions(
         0~2: coordinates
         3: GC%
     """
-    __interval_key__ = "{0}:{1}-{2}"
     pybedtools.set_tempdir(".")
 
     if type(input_region_file) is pybedtools.BedTool:
@@ -178,7 +179,11 @@ def generate_gc_matched_random_regions(
                "num_C", "num_G", "num_T", "num_N", "num_oth", "seq_len"),
         comment="#")
 
-    assert region_content_df.shape[1] == 12
+    if region_content_df.shape[1] != 12:
+        raise ValueError(
+            "Unexpected nucleotide-content table shape. Expected 12 columns, "
+            f"got {region_content_df.shape[1]}."
+        )
     act_bins, bin_crit = pd.cut(
         region_content_df["pct_gc"], bins=bins, retbins=True, labels=np.arange(bins))
     per_bin_sampling_target = (
@@ -419,7 +424,7 @@ def build_data_volume(regions: pd.DataFrame, target_pl_bws: List[Union[pyBigWig.
     target_mn_bws : List[Union[pyBigWig.pyBigWig, str]]
         bulk signal (path to the file or pyBigWig object) for the reverse strand
     accessibility_tracks : List[Union[pyBigWig.pyBigWig, str]]
-        Accessibility (path to the file or pyBigWig object) for each psuedo-bulk cluster
+        Accessibility (path to the file or pyBigWig object) for each pseudo-bulk cluster
     t_x : int
         Output (prediction) length
     save_to : str
@@ -756,7 +761,7 @@ def convert_bulk_frags_to_ct_frags(fragments_file: str, barcode_file: str, save_
                 fh = frag_file_handles[source_ct]
                 fh.write(frag)
                 frags_per_ct[source_ct] += 1
-            except KeyError as e:
+            except KeyError:
                 missing_frags += 1
         in_frag_handle.close()
 
@@ -816,7 +821,7 @@ def create_empty_bigwig(input_bw_path: str, output_bw_path: str, value: float = 
     output_bw_path : str
         Path to the output BigWig file with zeros.
     value : float, optional
-        Placeholder value in the new file
+        Place holder value in the new file
 
     Returns
     -------

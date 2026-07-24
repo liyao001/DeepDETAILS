@@ -1,44 +1,92 @@
 import logging
-import h5py
 import os
-import torch
+from glob import glob
+from multiprocessing import Pool
+from typing import Optional, Sequence, Tuple, Union
+
+import h5py
 import numpy as np
 import pandas as pd
 import pytorch_lightning as pl
-from glob import glob
-from typing import Optional, Tuple, Sequence, Union
-from multiprocessing import Pool
+import torch
+from pytorch_lightning.utilities import move_data_to_device
 from torch.utils.data import DataLoader
 from tqdm import tqdm
-from pytorch_lightning.utilities import move_data_to_device
-from deepdetails.par_description import PARAM_DESC
+
 from deepdetails.__about__ import __version__
-from deepdetails.helper.attr import ModelWithSummarization, ReducedDataset, ixg, write_scores_to_bigwigs
-from deepdetails.helper.utils import get_trainer, slugify, internal_qc, rescaling_prediction, compare_dicts
-from deepdetails.model.wrapper import DeepDETAILS
-from deepdetails.data import SequenceSignalDataset, DynamicDataset
-from deepdetails.helper.prep_ds import (extend_regions_from_mid_points, combine_regions, create_empty_bigwig,
-                                        generate_gc_matched_random_regions, build_data_volume,
-                                        convert_bulk_frags_to_ct_frags, frag_file_to_bw, merge_fragment_files)
+from deepdetails.data import DynamicDataset, SequenceSignalDataset
+from deepdetails.helper.attr import (
+    ModelWithSummarization,
+    ReducedDataset,
+    ixg,
+    write_scores_to_bigwigs,
+)
 from deepdetails.helper.preflight import preflight_check
+from deepdetails.helper.prep_ds import (
+    build_data_volume,
+    combine_regions,
+    convert_bulk_frags_to_ct_frags,
+    create_empty_bigwig,
+    extend_regions_from_mid_points,
+    frag_file_to_bw,
+    generate_gc_matched_random_regions,
+    merge_fragment_files,
+)
+from deepdetails.helper.utils import (
+    compare_dicts,
+    get_trainer,
+    internal_qc,
+    rescaling_prediction,
+    slugify,
+)
+from deepdetails.model.wrapper import DeepDETAILS
+from deepdetails.par_description import PARAM_DESC, RescalingMode
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(format="%(levelname)s | %(asctime)s | %(message)s", level=logging.INFO)
 __DD_OTHERS_MAGIC = "D.D.OTHERS"
 
+# These architectural hyperparameters jointly determine the model's receptive field and
+# internal cropping math (see model/deconvolution.py), which must stay in sync with the
+# window/target sizes baked into the dataset at `prep-data` time. 
+# These are fixed to DeepDETAILS' validated defaults.
+_FIXED_ARCHITECTURE_PARAMS = dict(
+    n_non_dil_layers=1,
+    non_dil_kernel_size=3,
+    n_dil_layers=9,
+    dil_kernel_size=4,
+    conv1_kernel_size=21,
+    profile_kernel_size=9,
+)
+
+_WINDOW_SIZE = 4096
+_Y_LENGTH = 1000
+
+
+def _default_export_device(accelerator: str, devices: Union[str, int, Sequence[int]]) -> str:
+    if accelerator == "cpu" or not torch.cuda.is_available():
+        return "cpu"
+    if isinstance(devices, int):
+        return "cuda" if devices == -1 else f"cuda:{devices}"
+    if isinstance(devices, str):
+        return "cuda"
+    if len(devices) == 0 or devices[0] == -1:
+        return "cuda"
+    return f"cuda:{devices[0]}"
+
 
 def deconv(dataset: str, save_to: str, study_name: str, batch_size: int, num_workers: int, min_delta: float,
-           save_preds: bool, chrom_cv: bool, y_length: int, earlystop_patience: int,
-           max_epochs: int, save_top_k_model: int, model_summary_depth: int, hide_progress_bar: bool,
-           accelerator: str, devices: str, version: str, wandb_project: Optional[str], wandb_entity: Optional[str],
-           gamma: float, wandb_upload_model: bool, profile_shrinkage: int, filters: int, n_non_dil_layers: int,
-           non_dil_kernel_size: int, n_dilated_layers: int, dil_kernel_size: int, head_layers: int,
-           conv1_kernel_size: int, gru_layers: int, gru_dropout: float, profile_kernel_size: int,
-           redundancy_loss_coef: float, prior_loss_coef: float, rescaling_mode: int, scale_function_placement: str,
-           learning_rate: float, betas: Tuple[float, float], lr_step_size: int, lr_gamma: float,
-           all_regions: bool = False, test_pos_only: bool = True, max_retry: int = 3,
-           cv: Optional[Tuple[str, ...]] = None, ct: Optional[Tuple[str, ...]] = None, n_times_more_embeddings: int = 2,
-           resume_from_ckpt: Optional[str] = None, loads_trunc: Optional[int] = None, seq_only: Optional[bool] = False):
+           save_preds: bool, chrom_cv: bool, earlystop_patience: int, max_epochs: int, save_top_k_model: int,
+           model_summary_depth: int, hide_progress_bar: bool, accelerator: str,
+           devices: Union[str, int, Sequence[int]], version: str, wandb_project: Optional[str],
+           wandb_entity: Optional[str], gamma: float, wandb_upload_model: bool, profile_shrinkage: int, filters: int,
+           head_layers: int, gru_layers: int, gru_dropout: float, redundancy_loss_coef: float, prior_loss_coef: float,
+           rescaling_mode: Union[int, RescalingMode], scale_function_placement: str, learning_rate: float,
+           betas: Tuple[float, float], lr_step_size: int, lr_gamma: float, all_regions: bool = False,
+           test_pos_only: bool = True, max_retry: int = 3, cv: Optional[Tuple[str, ...]] = None,
+           ct: Optional[Tuple[str, ...]] = None, n_times_more_embeddings: int = 2,
+           resume_from_ckpt: Optional[str] = None, loads_trunc: Optional[int] = None,
+           seq_only: Optional[bool] = False):
     """
     Deconvolve a bulk sequencing library with DETAILS
     """
@@ -47,12 +95,12 @@ def deconv(dataset: str, save_to: str, study_name: str, batch_size: int, num_wor
         logger.info("DeepDETAILS is running in sequence only mode")
 
     ds = SequenceSignalDataset(
-        root=dataset, y_length=y_length, is_training=True, non_background_only=not all_regions,
+        root=dataset, y_length=_Y_LENGTH, is_training=True, non_background_only=not all_regions,
         chromosomal_val=cv if chrom_cv else None, chromosomal_test=ct if chrom_cv else None,
         loads_trunc=loads_trunc
     )
     test_ds = SequenceSignalDataset(
-        root=dataset, y_length=y_length, is_training=2,
+        root=dataset, y_length=_Y_LENGTH, is_training=2,
         chromosomal_val=cv if chrom_cv else None, chromosomal_test=ct if chrom_cv else None,
         non_background_only=test_pos_only,
         loads_trunc=loads_trunc
@@ -85,17 +133,14 @@ def deconv(dataset: str, save_to: str, study_name: str, batch_size: int, num_wor
             wandb_entity=wandb_entity, wandb_upload_model=wandb_upload_model, pass_mark="")
 
         model = DeepDETAILS(expected_clusters=ds.n_clusters, filters=filters,
-                            n_non_dil_layers=n_non_dil_layers, non_dil_kernel_size=non_dil_kernel_size,
-                            n_dil_layers=n_dilated_layers, dil_kernel_size=dil_kernel_size,
-                            conv1_kernel_size=conv1_kernel_size, profile_shrinkage=profile_shrinkage,
-                            profile_kernel_size=profile_kernel_size, head_mlp_layers=head_layers,
+                            profile_shrinkage=profile_shrinkage, head_mlp_layers=head_layers,
+                            **_FIXED_ARCHITECTURE_PARAMS,
                             redundancy_loss_coef=redundancy_loss_coef, prior_loss_coef=prior_loss_coef,
                             scale_function_placement=scale_function_placement, num_tasks=ds.n_targets,
-                            gru_layers=gru_layers, gru_dropout=gru_dropout,
-                            n_times_more_embeddings=n_times_more_embeddings,
+                            gru_layers=gru_layers, gru_dropout=gru_dropout, n_times_more_embeddings=n_times_more_embeddings,
                             learning_rate=learning_rate, betas=betas, lr_step_size=lr_step_size, lr_gamma=lr_gamma,
                             version=ver, t_x=ds.t_x, test_screenshot_ratio=test_screenshots_ratio,
-                            gamma=gamma, seq_only=seq_only)
+                            gamma=gamma, rescaling_mode=rescaling_mode, seq_only=seq_only)
 
         logger.info("Start building model...")
         trainer.fit(model, ckpt_path=resume_from_ckpt, train_dataloaders=train_iter, val_dataloaders=None)
@@ -123,7 +168,7 @@ def deconv(dataset: str, save_to: str, study_name: str, batch_size: int, num_wor
                 logger.warning(
                     f"Deleting model file {ckpt_path} from the collapsed run")
                 os.remove(ckpt_path)
-            logger.info("Trying to rerun the deconvolution process...")
+            logger.info("Trying to re-deconvolute...")
         retry += 1
 
     if save_preds:
@@ -132,15 +177,16 @@ def deconv(dataset: str, save_to: str, study_name: str, batch_size: int, num_wor
             logger.info(f"Exporting predictions using checkpoint from {ckpt_path}...")
             export_results(DeepDETAILS, dataset, ckpt_path, batch_size, num_workers=num_workers,
                            save_to=save_to, study_name=study_name,
-                           y_length=y_length, rescaling_mode=rescaling_mode, loads_trunc=loads_trunc,
-                           pos_only=test_pos_only, device=f"cuda:{devices[0]}" if torch.cuda.is_available() else "cpu")
+                           rescaling_mode=rescaling_mode, loads_trunc=loads_trunc,
+                           pos_only=test_pos_only, device=_default_export_device(accelerator, devices))
         else:
             logger.warning(f"Checkpoint file {ckpt_path} doesn't exist anymore... Maybe model collapsed?")
 
 
 def _export_results(model: pl.LightningModule, dataset: callable, checkpoint: str, batch_size: int,
-                    num_workers: int, save_to: str, study_name: str = "", y_length: int = 1000,
-                    rescaling_mode: int = 0, device: str = "cpu", merge_strands: bool = False):
+                    num_workers: int, save_to: str, study_name: str = "",
+                    rescaling_mode: Union[int, RescalingMode] = RescalingMode.NONE,
+                    device: str = "cpu", merge_strands: bool = False):
     """
     Core function for exporting results to a hdf5 file, use it via export_results or export_wg_results
 
@@ -160,8 +206,6 @@ def _export_results(model: pl.LightningModule, dataset: callable, checkpoint: st
         {save_to}
     study_name : str, optional
         {study_name}
-    y_length : int, optional
-        {y_length}
     rescaling_mode : int, optional
         {rescaling_mode}
     device : str
@@ -173,7 +217,7 @@ def _export_results(model: pl.LightningModule, dataset: callable, checkpoint: st
     -------
 
     """.format(**PARAM_DESC)
-    trained_model = model.load_from_checkpoint(checkpoint).to(device=device)
+    trained_model = model.load_from_checkpoint(checkpoint, weights_only=False).to(device=device)
 
     pred_iter = DataLoader(dataset, batch_size=batch_size * 4, shuffle=False,
                            num_workers=num_workers, pin_memory=False)
@@ -193,7 +237,7 @@ def _export_results(model: pl.LightningModule, dataset: callable, checkpoint: st
 
     with h5py.File(data_file, "w") as f:
         # first save regions
-        truncation = (dataset.t_x - y_length) // 2
+        truncation = (dataset.t_x - _Y_LENGTH) // 2
         transformed_regions = regions_df.copy().drop(columns="index")
         transformed_regions[1] += truncation
         transformed_regions[2] -= truncation
@@ -205,8 +249,8 @@ def _export_results(model: pl.LightningModule, dataset: callable, checkpoint: st
 
         # then save the predictions
         out_targets = 1 if merge_strands and dataset.n_targets > 1 else dataset.n_targets
-        ds = f.create_dataset("preds", (dataset.n_clusters, n_regions, out_targets, y_length),
-                              dtype="f", chunks=(1, 1, out_targets, y_length), compression="gzip")
+        ds = f.create_dataset("preds", (dataset.n_clusters, n_regions, out_targets, _Y_LENGTH),
+                              dtype="f", chunks=(1, 1, out_targets, _Y_LENGTH), compression="gzip")
         ds.attrs["n_clusters"] = dataset.n_clusters
         ds.attrs["n_targets"] = out_targets
         ds.attrs["cluster_names"] = dataset.cluster_names
@@ -226,21 +270,23 @@ def _export_results(model: pl.LightningModule, dataset: callable, checkpoint: st
 
             ds[:, index_offset:index_offset + bs, :, :] = cluster_preds
             agg_counts = cluster_preds.sum(axis=-1).sum(axis=-1)
-            for i, ac in enumerate(agg_counts): counts_lst[i][index_offset:index_offset + bs] = torch.from_numpy(ac)
+            for i, ac in enumerate(agg_counts):
+                counts_lst[i][index_offset:index_offset + bs] = torch.from_numpy(ac)
             index_offset += bs
 
     region_name = regions_df[0] + ":" + transformed_regions[1].map(str) + "-" + transformed_regions[2].map(str)
 
-    counts_file = os.path.join(save_to, "counts.csv.gz") if study_name == "" else os.path.join(save_to,
-                                                                                               f"{slugify(study_name)}.counts.csv.gz")
-    pd.DataFrame({dataset.cluster_names[k]: v for k, v in enumerate(counts_lst)}, index=region_name.values).to_csv(
-        counts_file)
+    counts_file = os.path.join(save_to, "counts.csv.gz") if study_name == "" else os.path.join(
+        save_to, f"{slugify(study_name)}.counts.csv.gz")
+    pd.DataFrame({
+        dataset.cluster_names[k]: v for k, v in enumerate(counts_lst) if dataset.cluster_names[k] != __DD_OTHERS_MAGIC
+    }, index=region_name.values).to_csv(counts_file)
 
 
 def export_results(model: pl.LightningModule, dataset: Union[callable, str], checkpoint: str, batch_size: int,
                    num_workers: int, save_to: str, loads_trunc: Optional[int] = None,
-                   study_name: str = "", y_length: int = 1000, rescaling_mode: int = 0,
-                   merge_strands: bool = False, pos_only: bool = True, device: str = "cpu"):
+                   study_name: str = "", rescaling_mode: Union[int, RescalingMode] = RescalingMode.NONE,
+                   pos_only: bool = True, device: str = "cpu", merge_strands: bool = False):
     """
     Exports results to a hdf5 file
 
@@ -262,28 +308,26 @@ def export_results(model: pl.LightningModule, dataset: Union[callable, str], che
         {save_to}
     study_name : str, optional
         {study_name}
-    y_length : int, optional
-        {y_length}
     rescaling_mode : int, optional
         {rescaling_mode}
     pos_only : bool, optional
         {test_pos_only}
-    merge_strands : bool, optional
-        {merge_strands}
     device : str, optional
         {device}
+    merge_strands : bool, optional
+        {merge_strands}
 
     Returns
     -------
 
     """.format(**PARAM_DESC)
     pred_ds = SequenceSignalDataset(
-        root=dataset, y_length=y_length, is_training=-1, loads_trunc=loads_trunc,
+        root=dataset, y_length=_Y_LENGTH, is_training=-1, loads_trunc=loads_trunc,
         chromosomal_val=None, chromosomal_test=None, non_background_only=pos_only
     )
     _export_results(
         model, pred_ds, checkpoint, batch_size, num_workers, save_to,
-        study_name, y_length, rescaling_mode, device, merge_strands
+        study_name, rescaling_mode, device, merge_strands
     )
 
 
@@ -292,11 +336,12 @@ def export_wg_results(model: pl.LightningModule, checkpoint: str, fa_file: str, 
                       num_workers: int, save_to: str, mn_bulk_bw_file: Optional[str] = None,
                       pl_ct_bw_files: Optional[Sequence[str]] = None, mn_ct_bw_files: Optional[Sequence[str]] = None,
                       sc_norm_file: Optional[str] = None, cluster_names: Optional[Sequence[str]] = None,
-                      y_length: int = 1_000, target_sliding_sum: Optional[int] = 0, window_size: int = 4096,
-                      is_training: int = 1, chromosomal_val: Optional[Sequence[str]] = None,
+                      target_sliding_sum: Optional[int] = 0, is_training: int = 1,
+                      chromosomal_val: Optional[Sequence[str]] = None,
                       chromosomal_test: Optional[Sequence[str]] = None, loads_trunc: Optional[int] = None,
-                      study_name: str = "", rescaling_mode: int = 0, pos_only: bool = True,
-                      use_bulk_constraint: Optional[bool] = False, merge_strands: bool = False, device: str = "cpu"):
+                      study_name: str = "", rescaling_mode: Union[int, RescalingMode] = RescalingMode.NONE,
+                      pos_only: bool = True, use_bulk_constraint: Optional[bool] = False,
+                      merge_strands: bool = False, device: str = "cpu"):
     """
     Exports whole genome results to a hdf5 file
 
@@ -318,8 +363,6 @@ def export_wg_results(model: pl.LightningModule, checkpoint: str, fa_file: str, 
         {save_to}
     study_name : str, optional
         {study_name}
-    y_length : int, optional
-        {y_length}
     rescaling_mode : int, optional
         {rescaling_mode}
     pos_only : bool, optional
@@ -339,13 +382,13 @@ def export_wg_results(model: pl.LightningModule, checkpoint: str, fa_file: str, 
         fa_file=fa_file, pl_bulk_bw_file=pl_bulk_bw_file, acc_bw_files=acc_bw_files,
         regions_file=regions_file, mn_bulk_bw_file=mn_bulk_bw_file, pl_ct_bw_files=pl_ct_bw_files,
         mn_ct_bw_files=mn_ct_bw_files, sc_norm_file=sc_norm_file, cluster_names=cluster_names,
-        y_length=y_length, is_training=is_training, loads_trunc=loads_trunc, t_x=window_size,
+        y_length=_Y_LENGTH, is_training=is_training, loads_trunc=loads_trunc, t_x=_WINDOW_SIZE,
         chromosomal_val=chromosomal_val, chromosomal_test=chromosomal_test, non_background_only=pos_only,
         target_sliding_sum=target_sliding_sum, use_bulk_constraint=use_bulk_constraint
     )
     _export_results(
         model, pred_ds, checkpoint, batch_size, num_workers, save_to,
-        study_name, y_length, rescaling_mode, device, merge_strands
+        study_name, rescaling_mode, device, merge_strands
     )
 
 
@@ -375,7 +418,12 @@ def pred_to_bw(pred_file: str, save_to: str, chrom_size: str, min_abs_val: float
     -------
 
     """.format(**PARAM_DESC)
-    from deepdetails.helper.export import preds_to_bg_star, bg_to_bw_core, STRAND_LABELS, STRAND_COEFF
+    from deepdetails.helper.export import (
+        STRAND_COEFF,
+        STRAND_LABELS,
+        bg_to_bw_core,
+        preds_to_bg_star,
+    )
 
     with h5py.File(pred_file, "r") as f:
         n_clusters = f["preds"].attrs["n_clusters"]
@@ -412,7 +460,7 @@ def pred_to_bw(pred_file: str, save_to: str, chrom_size: str, min_abs_val: float
         p.starmap(bg_to_bw_core, jobs)
 
 
-def prepare_dataset(regions: Sequence[str], bulk_pl: str, save_to: str, window_size: int,
+def prepare_dataset(regions: Sequence[str], bulk_pl: str, save_to: str,
                     chrom_size: str, genome_fa: str, background_sampling_ratio: float = 0.,
                     fragments: Optional[str] = None, barcodes: Optional[str] = None,
                     accessibility: Optional[Sequence[str]] = None, bulk_mn: Optional[str] = None,
@@ -424,7 +472,8 @@ def prepare_dataset(regions: Sequence[str], bulk_pl: str, save_to: str, window_s
                     candidate_qval: float = 0.01, candidate_fc: float = 2, max_top_n: int = 1000, n_aggs: int = 5,
                     min_cells_required: Optional[int] = 20, memory_saving: Optional[bool] = False,
                     use_qnorm: Optional[bool] = False, disable_rpm: Optional[bool] = False,
-                    collapse_missing_cell_types: Optional[bool] = False, combine_cell_types: Optional[Sequence[str]] = None,):
+                    collapse_missing_cell_types: Optional[bool] = False,
+                    combine_cell_types: Optional[Sequence[str]] = None,):
     """Build a dataset for DETAILS
 
     Parameters
@@ -435,8 +484,6 @@ def prepare_dataset(regions: Sequence[str], bulk_pl: str, save_to: str, window_s
         {bulk_pl}
     save_to : str
         {save_to}
-    window_size : int
-        {t_x}
     chrom_size : str
         {chrom_size}
     genome_fa : str
@@ -512,7 +559,7 @@ def prepare_dataset(regions: Sequence[str], bulk_pl: str, save_to: str, window_s
                           f"You can generate it with `samtools faidx`")
         extended_regions = extend_regions_from_mid_points(
             combine_regions(regions, chrs_in_fa, merge_overlap=merge_overlap_peaks),
-            extensions=(window_size // 2, window_size // 2 - 1),
+            extensions=(_WINDOW_SIZE // 2, _WINDOW_SIZE // 2 - 1),
             chromosome_size=chrom_size)
         extended_regions["region_type"] = 1
 
@@ -523,9 +570,9 @@ def prepare_dataset(regions: Sequence[str], bulk_pl: str, save_to: str, window_s
 
         # check if all regions are extended successfully, if not, remove failed ones
         d = extended_regions[2] - extended_regions[1]
-        if (d == window_size).sum() != d.shape[0]:
+        if (d == _WINDOW_SIZE).sum() != d.shape[0]:
             n_before = extended_regions.shape[0]
-            extended_regions = extended_regions.loc[d == window_size].copy().reset_index(drop=True)
+            extended_regions = extended_regions.loc[d == _WINDOW_SIZE].copy().reset_index(drop=True)
             n_after = extended_regions.shape[0]
             logger.warning(f"{n_after - n_before} regions removed because of their lengths")
 
@@ -629,7 +676,8 @@ def prepare_dataset(regions: Sequence[str], bulk_pl: str, save_to: str, window_s
             norm_factors = []
             for ct in ref_labels:
                 accessibility.append(f"{save_to}/{ct}.fragments.bw")
-                assert os.path.exists(accessibility[-1])
+                if not os.path.exists(accessibility[-1]):
+                    raise FileNotFoundError(f"Expected generated accessibility BigWig not found: {accessibility[-1]}")
                 norm_factors.append((ct, _frags_per_ct[ct]))
             if not keep_frags:
                 for ct in glob(f"{save_to}/*.fragments.tsv"):
@@ -646,7 +694,7 @@ def prepare_dataset(regions: Sequence[str], bulk_pl: str, save_to: str, window_s
                 mn_refs.append(mnf)
 
     build_data_volume(final_regions, [bulk_pl, ], [bulk_mn, ] if bulk_mn is not None else [],
-                      accessibility, window_size, save_to, genome_fa, pl_refs, mn_refs,
+                      accessibility, _WINDOW_SIZE, save_to, genome_fa, pl_refs, mn_refs,
                       target_sliding_sum=target_sliding_sum)
 
     # save RPM-norm factors
@@ -746,7 +794,8 @@ def merge_rep_preds(in_pred_files: Sequence[str], save_to: str, keep_old: bool =
         ds[:, idx, :, :] = per_rep_values.mean(axis=0)
 
     # close files
-    for f in ins: f.close()
+    for f in ins:
+        f.close()
     out.close()
     logger.info("Merging completed")
 
@@ -756,7 +805,7 @@ def merge_rep_preds(in_pred_files: Sequence[str], save_to: str, keep_old: bool =
             os.remove(f)
 
 
-def export_attr(checkpoint: str, dataset: str, save_to: str, y_length: int, batch_size: int,
+def export_attr(checkpoint: str, dataset: str, save_to: str, batch_size: int,
                 device: str = "cuda", chrom_size: Optional[str] = None,
                 hide_progress_bar: bool = False):
     """
@@ -770,8 +819,6 @@ def export_attr(checkpoint: str, dataset: str, save_to: str, y_length: int, batc
         {dataset}
     save_to : str
         {save_to}
-    y_length : int
-        {y_length}
     batch_size : int
         {batch_size}
     device : str
@@ -789,7 +836,7 @@ def export_attr(checkpoint: str, dataset: str, save_to: str, y_length: int, batc
     summarized_model = ModelWithSummarization(model, summarizer="sum").to(device=device)
 
     raw_ds = SequenceSignalDataset(
-        root=dataset, y_length=y_length, is_training=True, non_background_only=True,
+        root=dataset, y_length=_Y_LENGTH, is_training=True, non_background_only=True,
         chromosomal_val=None, chromosomal_test=None,
     )
     dataset = ReducedDataset(raw_ds)
