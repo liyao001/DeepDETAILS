@@ -1,0 +1,23 @@
+[files]
+extend-exclude = [
+  "dist",
+  "test",
+  "wandb",
+  "tests/data",
+  "tests/wandb",
+  "*.bw",
+  "*.ckpt",
+  "*.gz",
+  "*.h5",
+  "*.png",
+]
+
+[default.extend-words]
+DeepDETAILS = "DeepDETAILS"
+pyBigWig = "pyBigWig"
+BigWig = "BigWig"
+WandB = "WandB"
+scATAC = "scATAC"
+snATAC = "snATAC"
+qval = "qval"
+ttest = "ttest"

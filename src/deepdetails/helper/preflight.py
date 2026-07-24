@@ -1,13 +1,15 @@
 import logging
 import os
-import pyBigWig
-import pybedtools
+from typing import Iterable
+
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-from typing import Iterable
-from scipy.stats import ttest_ind, false_discovery_control
+import pybedtools
+import pyBigWig
+from scipy.stats import false_discovery_control, ttest_ind
 from sklearn.svm import NuSVR
+
 from deepdetails.par_description import PARAM_DESC
 
 logger = logging.getLogger("Preflight Check")
@@ -36,11 +38,12 @@ def load_bulk_signal(region: pd.DataFrame, bulk_bws: tuple) -> pd.Series:
         try:
             return np.abs([v if v is not None else 0. for v in
                            [bw.stats(row[0], row[1], row[2], type="sum", exact=True)[0] for bw in bw_objs]]).sum()
-        except:
+        except Exception:
             return 0.
 
     values = region.apply(row_atom_func, axis=1)
-    for bwo in bw_objs: bwo.close()
+    for bwo in bw_objs:
+        bwo.close()
     return values
 
 

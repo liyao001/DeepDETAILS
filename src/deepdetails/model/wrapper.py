@@ -1,12 +1,20 @@
+from typing import Optional, Tuple
+
+import pytorch_lightning as pl
 import torch
 import torchmetrics
-import pytorch_lightning as pl
-from typing import Tuple, Optional
 from einops import rearrange
-from deepdetails.helper.inspection import bulk_visual_inspection, per_cluster_visual_inspection
-from deepdetails.model.loss import RMSLELoss, off_diagonal
+
+from deepdetails.helper.inspection import (
+    bulk_visual_inspection,
+    per_cluster_visual_inspection,
+)
+from deepdetails.helper.utils import (
+    calc_counts_per_locus,
+    transform_counts,
+)
 from deepdetails.model.deconvolution import Regressor, SeqOnlyRegressor
-from deepdetails.helper.utils import transform_counts, calc_counts_per_locus
+from deepdetails.model.loss import RMSLELoss, corrcoef_stable, mean_sq_offdiag_corr
 from deepdetails.par_description import PARAM_DESC
 
 
@@ -15,11 +23,12 @@ class DeepDETAILS(pl.LightningModule):
                  n_non_dil_layers: int = 0, non_dil_kernel_size: int = 3, n_dil_layers: int = 8,
                  dil_kernel_size: int = 3, conv1_kernel_size: int = 21, gru_layers: int = 1,
                  gru_dropout: float = 0.1, profile_kernel_size: int = 75, head_mlp_layers: int = 3,
-                 num_tasks: int = 2, first_pass: Optional[bool] = None, redundancy_loss_coef: float = 1.,
+                 num_tasks: int = 2, first_pass: Optional[bool] = None, redundancy_loss_coef: float = 0.01,
                  prior_loss_coef: float = 1., learning_rate: float = 1e-3, version: str = "",
                  lr_step_size: int = 1, lr_gamma: float = 0.1,
                  scale_function_placement: str = "late-ch", t_x: int = 4096, test_screenshot_ratio: float = 0.002,
-                 gamma: float = 1e-8, n_times_more_embeddings: int = 2, betas: Tuple[float, float] = (0.9, 0.999),
+                 gamma: float = 1e-8, rescaling_mode: int = 0,
+                 n_times_more_embeddings: int = 2, betas: Tuple[float, float] = (0.9, 0.999),
                  seq_only: Optional[bool] = False) -> None:
         """
 
@@ -73,6 +82,8 @@ class DeepDETAILS(pl.LightningModule):
             {test_screenshot_ratio}
         gamma : float
             {gamma}
+        rescaling_mode : int
+            {rescaling_mode}
         n_times_more_embeddings : int
             {n_times_more_embeddings}
         betas : Tuple[float, float]
@@ -129,15 +140,21 @@ class DeepDETAILS(pl.LightningModule):
         self.test_screenshot_ratio = test_screenshot_ratio
         self.gamma = gamma
 
+        self.mod_rescaling = rescaling_mode
         self.self_qc_values = []
         self.sum_qc_metrics = torch.zeros(expected_clusters * num_tasks)
         self.enable_sum_qc_metrics = False
+
+        # init lazy layers
+        with torch.no_grad():
+            self.forward(*self.example_input_array)
 
     def forward(self, x, loads):
         return self.model(x, loads)
 
     def training_step(self, batch, batch_idx):
         x, expected_counts, expected_profiles, _, loads, misc = batch
+        batch_size = loads.shape[0]
 
         pc_profiles, pc_counts, _, _ = self.model(x, loads)
 
@@ -145,28 +162,29 @@ class DeepDETAILS(pl.LightningModule):
         preds = cs_preds.sum(dim=0)
 
         msle_loss = self.profile_loss_func(preds, expected_profiles)
-        self.log("train_msle_loss", msle_loss, prog_bar=True, on_step=True)
+        self.log("train_msle_loss", msle_loss, batch_size=batch_size, prog_bar=True, on_step=True)
 
         reshaped = rearrange(cs_preds, "c b s l -> c b (s l)")
         reshaped = reshaped + torch.arange(reshaped.shape[-1], device=self.device) * self.gamma
 
         if reshaped.shape[1] > 1:
-            branch_corrs = torch.tensor(
-                [off_diagonal(torch.corrcoef(sample)).pow_(2).mean() for sample in reshaped]).mean()
+            # When the coefficient is 0, keep branch_corrs out of the graph
+            branch_corrs = torch.stack(
+                [mean_sq_offdiag_corr(sample) for sample in reshaped]).mean()
             if batch_idx % 50 == 0:
                 self.self_qc_values.append(branch_corrs.item())
         else:
-            branch_corrs = torch.tensor(0)
-        self.log("train_br_cor", branch_corrs, on_step=True)
+            branch_corrs = msle_loss.new_tensor(0.)
+        self.log("train_br_cor", branch_corrs, batch_size=batch_size, on_step=True)
 
         if misc[-1].dim() == 2:
             prior = misc[-1][:, :]
             cluster_preds = rearrange(
                 cs_preds + torch.arange(cs_preds.shape[-1], device=self.device) * self.gamma,
                 "c b s l -> c (b s l)")
-            observed_corrs = torch.corrcoef(cluster_preds)
-            prior_loss = (prior - observed_corrs).pow_(2).mean()
-            self.log("train_prior_loss", prior_loss, on_step=True)
+            observed_corrs = corrcoef_stable(cluster_preds)
+            prior_loss = (prior - observed_corrs).pow(2).mean()
+            self.log("train_prior_loss", prior_loss, batch_size=batch_size, on_step=True)
             loss = msle_loss + branch_corrs * self.redundancy_loss_coef + prior_loss * self.prior_loss_coef
         else:
             loss = msle_loss + branch_corrs * self.redundancy_loss_coef
@@ -176,23 +194,22 @@ class DeepDETAILS(pl.LightningModule):
             transform_counts(expected_profiles.flatten())
         )
 
-        self.log("train_loss", loss, on_epoch=True,
-                 on_step=True, prog_bar=True)
-
-        self.log("train_corr", cor, prog_bar=True)
+        self.log("train_loss", loss, batch_size=batch_size, on_epoch=True, on_step=True, prog_bar=True)
+        self.log("train_corr", cor, batch_size=batch_size, prog_bar=True)
         return loss
 
     def validation_step(self, batch, batch_idx):
         x, expected_counts, expected_profiles, _, loads, misc = batch
+        batch_size = loads.shape[0]
 
         pc_profiles, pc_counts, _, _ = self.model(x, loads)
         preds = calc_counts_per_locus(pc_profiles, pc_counts, False)
 
         msle_loss = self.profile_loss_func(preds, expected_profiles)
-        self.log("val_msle_loss", msle_loss, prog_bar=True)
+        self.log("val_msle_loss", msle_loss, batch_size=batch_size, prog_bar=True)
         loss = msle_loss
 
-        self.log("val_loss", loss, prog_bar=True)
+        self.log("val_loss", loss, batch_size=batch_size, prog_bar=True)
 
         val_cor = self.val_pearsonr(
             transform_counts(preds.flatten()),
@@ -203,7 +220,7 @@ class DeepDETAILS(pl.LightningModule):
             bulk_visual_inspection(preds, expected_profiles, calc_counts_per_locus(pc_profiles, pc_counts, True),
                                    f"e{self.current_epoch}.b{x[0].sum().item():.4f}.s", logger=self.logger)
 
-        self.log("val_corr", val_cor, prog_bar=True)
+        self.log("val_corr", val_cor, batch_size=batch_size, prog_bar=True)
 
         return loss
 
@@ -221,6 +238,8 @@ class DeepDETAILS(pl.LightningModule):
         -------
 
         """
+        batch_size = per_cluster_y_hat.shape[1]
+
         y_hats_list = []
         if per_cluster_y.shape[0] == per_cluster_y_hat.shape[0]:
             for i, real_profiles in enumerate(per_cluster_y):
@@ -233,10 +252,11 @@ class DeepDETAILS(pl.LightningModule):
                 test_cor = torch.corrcoef(x)[0, 1]
                 if torch.isnan(test_cor):
                     test_cor = 0.
-                self.log(f"test_corr_{i}", test_cor, on_epoch=True)
+                self.log(f"test_corr_{i}", test_cor, batch_size=batch_size, on_epoch=True)
 
     def test_step(self, batch: torch.Tensor, batch_idx: int, dataloader_idx: int = 0):
         x, expected_counts, expected_profiles, expected_per_cluster_profiles, loads, _ = batch
+        batch_size = loads.shape[0]
 
         pc_profiles, pc_counts, pc_weights, _ = self.model(x, loads)
 
@@ -269,8 +289,8 @@ class DeepDETAILS(pl.LightningModule):
                                        f"preview{batch_idx}.{dataloader_idx}.{x[0].sum().item():.4f}.s",
                                        logger=self.logger)
 
-        self.log("test_loss", msle_loss, on_epoch=True)
-        self.log("test_corr", test_cor, prog_bar=True, on_epoch=True)
+        self.log("test_loss", msle_loss, batch_size=batch_size, on_epoch=True)
+        self.log("test_corr", test_cor, batch_size=batch_size, prog_bar=True, on_epoch=True)
 
         per_cluster_per_strand_total = torch.stack(pc_counts).clone().detach().sum(axis=1).flatten().to(
             self.sum_qc_metrics.device)

@@ -1,17 +1,19 @@
 import os
+from collections import defaultdict
+from itertools import combinations
+from typing import Optional, Union
+
 import h5py
-import pybedtools
-import pyBigWig
-import torch
 import numpy as np
 import pandas as pd
+import pybedtools
+import pyBigWig
 import pytorch_lightning as pl
-from collections import defaultdict
-from itertools import combinations, cycle
-from typing import Union, Optional
+import torch
 from torch import nn
 from torch.utils.data import DataLoader
 from tqdm import tqdm
+
 from deepdetails.data import SequenceSignalDataset
 from deepdetails.helper.utils import calc_counts_per_locus
 

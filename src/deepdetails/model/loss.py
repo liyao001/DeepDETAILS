@@ -34,5 +34,28 @@ def off_diagonal(x: torch.Tensor):
         n*n-n
     """
     n, m = x.shape
-    assert n == m
+    if n != m:
+        raise ValueError(f"Expected a square matrix, got shape {tuple(x.shape)}")
     return x.flatten()[:-1].view(n - 1, n + 1)[:, 1:].flatten()
+
+
+def corrcoef_stable(x: torch.Tensor, eps: float = 1e-12) -> torch.Tensor:
+    """Row-wise Pearson correlation matrix, safer for (near) zero-variance rows.
+
+    Parameters
+    ----------
+    x : torch.Tensor
+        Input tensor
+    eps : float
+        Min value to avoid nans
+    """
+    x = x - x.mean(dim=-1, keepdim=True)
+    std = (x.square().mean(dim=-1) + eps).sqrt()
+    x = x / std.unsqueeze(-1)
+    corr = (x @ x.transpose(-1, -2)) / x.shape[-1]
+    return corr.clamp(-1.0, 1.0)
+
+
+def mean_sq_offdiag_corr(x: torch.Tensor, eps: float = 1e-12) -> torch.Tensor:
+    """Mean squared off-diagonal Pearson correlation of the rows of ``x``."""
+    return off_diagonal(corrcoef_stable(x, eps=eps)).pow(2).mean()

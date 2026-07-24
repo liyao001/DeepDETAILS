@@ -17,6 +17,7 @@ A clear and concise description of what the bug is.
 **Environment**
 - Python version: [e.g. 3.9.6]
 - DeepDETAILS version [e.g. 1.0.0]
+- GPU device and quantity: [e.g. 1x A100]
 
 **DeepDETAILS log file**
 Please paste the outputs and error messages in the report

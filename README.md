@@ -10,19 +10,22 @@
 
 ## Installation
 
-DeepDETAILS can be installed via `conda`: 
+**Recommended:** install with `conda`/`mamba` so binary dependencies
+(`bedtools`, `bedGraphToBigWig`) are installed automatically:
 
 ```console
 conda install -c bioconda -c conda-forge "pytorch=2.6.0=cuda*" deepdetails
 ```
 
-DeepDETAILS can also be installed via `pip`:
+Alternatively, install with `pip` (you must provide the binaries yourself):
+
 ```console
 pip install DeepDETAILS
 ```
 
-> If you prefer to install DeepDETAILS using pip, please make sure you have [`bedGraphToBigWig`](https://hgdownload.cse.ucsc.edu/admin/exe/linux.x86_64/bedGraphToBigWig) 
-and [`bedtools`](https://bedtools.readthedocs.io/en/latest/) installed. DeepDETAILS use these tools to export the deconvolved results to bigWig files. 
+> If you install via pip, make sure [`bedGraphToBigWig`](https://hgdownload.cse.ucsc.edu/admin/exe/linux.x86_64/bedGraphToBigWig)
+> and [`bedtools`](https://bedtools.readthedocs.io/en/latest/) are on your `PATH`.
+> DeepDETAILS uses these tools when exporting deconvolved results to bigWig files.
 
 ## Get started
 
@@ -62,7 +65,7 @@ The outputs from a successful deconvolution process look like the following:
 ├── sample-a
 │   └── 250212144109: The folder containing deconvolution results (name changes according to the time).
 │       ├── epoch=0-step=2538.ckpt: Trained model
-│       ├── hparams.yaml: Hyperparamters
+│       ├── hparams.yaml: Hyperparameters
 │       ├── metrics.csv: Training log
 ...
 │       └── preview972.0.131072.0000.s21250212144109.png: Preview genome browser views
@@ -95,4 +98,6 @@ deepdetails attr \
 ```
 
 ## Reference
-> Yao, L. et al. High-resolution reconstruction of cell-type specific transcriptional regulatory processes from bulk sequencing samples. [Preprint at bioRxiv](https://doi.org/10.1101/2025.04.02.646189) (2025).
+If you find DeepDETAILS helpful, please cite:
+
+> [Yao, L. et al. High-resolution reconstruction of cell-type-specific transcriptional regulatory processes from bulk sequencing samples. Nat Biotechnol 1–12 (2026) doi:10.1038/s41587-026-03218-w.](https://www.nature.com/articles/s41587-026-03218-w)

@@ -1,10 +1,12 @@
 import unittest
 import torch
 import numpy as np
+import pytest
 from scipy.special import softmax
 from deepdetails.model.loss import RMSLELoss
 
 
+@pytest.mark.unit
 class ProfileLossTestCase(unittest.TestCase):
     def setUp(self) -> None:
         super().setUp()
@@ -39,7 +41,7 @@ class ProfileLossTestCase(unittest.TestCase):
         )
         
         # Simulate predictions
-        # The first set of predictions captures the shape, but the values are scaled by a constant to the real vaules.
+        # The first set of predictions captures the shape, but the values are scaled by a constant to the real values.
         # Expecting overall small loss, and loss for squash_05, stretch_2 should be smaller than that of squash_02 and stretch_3.
         self.preds_squash_02 = self.simulated_signals * 0.2
         self.preds_squash_05 = self.simulated_signals * 0.5
