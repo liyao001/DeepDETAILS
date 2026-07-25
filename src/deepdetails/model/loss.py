@@ -7,6 +7,7 @@ class RMSLELoss(nn.Module):
     Root Mean Square Log Error
 
     """
+
     def __init__(self, squared=True):
         super().__init__()
         self.mse = nn.MSELoss(reduction="none")
@@ -15,7 +16,13 @@ class RMSLELoss(nn.Module):
     def forward(self, pred: torch.Tensor, actual: torch.Tensor):
         # shape of self.mse(): batch, clusters, seq_len
         # shape of self.mse().sum(axis=-1): batch, clusters
-        mse = self.mse(torch.log(torch.clamp_min(pred, -0.999) + 1), torch.log(actual + 1)).sum(axis=-1).mean()
+        mse = (
+            self.mse(
+                torch.log(torch.clamp_min(pred, -0.999) + 1), torch.log(actual + 1)
+            )
+            .sum(axis=-1)
+            .mean()
+        )
         return torch.sqrt(mse) if self.squared else mse
 
 

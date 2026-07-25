@@ -14,7 +14,6 @@ authors = [
   { name = "Li Yao", email = "regulatorygenome@gmail.com" },
 ]
 classifiers = [
-  "Development Status :: 3 - Alpha",
   "Programming Language :: Python",
   "Programming Language :: Python :: 3.10",
   "Programming Language :: Python :: 3.11",
@@ -74,6 +73,7 @@ test-train = "pytest -m train {args:tests}"
 test-unit = "pytest -m unit {args:tests}"
 test-cov = "coverage run -m pytest {args:tests}"
 lint = "ruff check {args:.}"
+check-typos = "typos --config .typos.toml {args:.}"
 check-dist = "twine check {args:dist/*}"
 cov-report = [
   "- coverage combine",
@@ -87,12 +87,8 @@ cov = [
 [[tool.hatch.envs.all.matrix]]
 python = ["3.10", "3.11", "3.12", "3.13"]
 
-[tool.hatch.envs.types]
-dependencies = [
-  "mypy>=1.0.0",
-]
-[tool.hatch.envs.types.scripts]
-check = "mypy --install-types --non-interactive {args:src/deepdetails tests}"
+[tool.hatch.envs.hatch-check-types]
+config-path = "pyrefly.toml"
 
 [tool.coverage.run]
 source_pkgs = ["deepdetails", "tests"]

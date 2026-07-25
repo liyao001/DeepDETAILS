@@ -1,5 +1,3 @@
-from typing import Tuple
-
 import torch
 from torch import nn
 
@@ -7,25 +5,38 @@ from . import ResidualConv, ResidualConvWithXProjection
 
 
 class BaseRegressor(nn.Module):
-    def __init__(self, filters=512, n_non_dil_layers=0, non_dil_kernel_size=3,
-                 n_dil_layers=8, dil_kernel_size=3, profile_kernel_size=75,
-                 counts_head_mlp_layers=3, num_tasks=1) -> None:
+    def __init__(
+        self,
+        filters=512,
+        n_non_dil_layers=0,
+        non_dil_kernel_size=3,
+        n_dil_layers=8,
+        dil_kernel_size=3,
+        profile_kernel_size=75,
+        counts_head_mlp_layers=3,
+        num_tasks=1,
+    ) -> None:
         super().__init__()
         self.body = nn.Sequential()
 
         for _ in range(n_non_dil_layers):
             self.body.append(
-                ResidualConv(filters=filters, kernel_size=non_dil_kernel_size,
-                             dilation_rate=1)
+                ResidualConv(
+                    filters=filters, kernel_size=non_dil_kernel_size, dilation_rate=1
+                )
             )
         for i in range(n_dil_layers):
             self.body.append(
-                ResidualConv(filters=filters, kernel_size=dil_kernel_size,
-                             dilation_rate=2 ** (i + 1))
+                ResidualConv(
+                    filters=filters,
+                    kernel_size=dil_kernel_size,
+                    dilation_rate=2 ** (i + 1),
+                )
             )
 
         self.shape_head = nn.LazyConv1d(
-            num_tasks, kernel_size=profile_kernel_size, padding="valid")
+            num_tasks, kernel_size=profile_kernel_size, padding=0
+        )
         self.counts_head = nn.Sequential()
         for _ in range(counts_head_mlp_layers):
             self.counts_head.append(nn.LazyLinear(filters))
@@ -57,18 +68,27 @@ class BaseRegressor(nn.Module):
 
 class SeqOnlyRegressor(nn.Module):
     def __init__(
-            self, expected_clusters: int,
-            filters=512, n_non_dil_layers=0, non_dil_kernel_size=3,
-            n_dil_layers=8, dil_kernel_size=3, conv1_kernel_size=21, profile_kernel_size=75,
-            counts_head_mlp_layers=3, num_tasks=1, n_times_more_embeddings=2,
-            scale_function_placement: str = "late-ch") -> None:
-
+        self,
+        expected_clusters: int,
+        filters=512,
+        n_non_dil_layers=0,
+        non_dil_kernel_size=3,
+        n_dil_layers=8,
+        dil_kernel_size=3,
+        conv1_kernel_size=21,
+        profile_kernel_size=75,
+        counts_head_mlp_layers=3,
+        num_tasks=1,
+        n_times_more_embeddings=2,
+        scale_function_placement: str = "late-ch",
+    ) -> None:
         super().__init__()
         self.expected_clusters = expected_clusters
 
         # first convolution without dilation
         self.motif_detector = nn.Conv1d(
-            4, filters, kernel_size=conv1_kernel_size, padding="valid")
+            4, filters, kernel_size=conv1_kernel_size, padding="valid"
+        )
 
         self.cluster_regressor = nn.ModuleList()
 
@@ -82,18 +102,22 @@ class SeqOnlyRegressor(nn.Module):
                     dil_kernel_size=dil_kernel_size,
                     profile_kernel_size=profile_kernel_size,
                     counts_head_mlp_layers=counts_head_mlp_layers,
-                    num_tasks=num_tasks)
+                    num_tasks=num_tasks,
+                )
             )
 
         self.scale_function_placement = scale_function_placement
 
-    def forward(self, x: Tuple[torch.Tensor, torch.Tensor], per_cluster_load: torch.Tensor) -> tuple[
-        list[torch.Tensor], list[torch.Tensor], torch.Tensor, list[torch.Tensor]]:
+    def forward(
+        self, x: tuple[torch.Tensor, torch.Tensor], per_cluster_load: torch.Tensor
+    ) -> tuple[
+        list[torch.Tensor], list[torch.Tensor], torch.Tensor, list[torch.Tensor]
+    ]:
         """Forward propagation
 
         Parameters
         ----------
-        x : Tuple[torch.Tensor, torch.Tensor]
+        x : tuple[torch.Tensor, torch.Tensor]
             seq: Shape: batch, ATCG, window_size
             atac: Shape: batch, n_clusters, window_size
         per_cluster_load : torch.Tensor
@@ -122,9 +146,12 @@ class SeqOnlyRegressor(nn.Module):
 
             if self.scale_function_placement == "early":
                 cluster_profile, cluster_counts = self.cluster_regressor[cluster_id](
-                    motifs * cw[:, None, None])
+                    motifs * cw[:, None, None]
+                )
             else:
-                cluster_profile, cluster_counts = self.cluster_regressor[cluster_id](motifs)
+                cluster_profile, cluster_counts = self.cluster_regressor[cluster_id](
+                    motifs
+                )
             if self.scale_function_placement == "late":
                 per_cluster_profiles.append(cluster_profile * cw[:, None, None])
                 per_cluster_counts.append(cluster_counts * cw[:, None])
@@ -135,18 +162,31 @@ class SeqOnlyRegressor(nn.Module):
                 per_cluster_profiles.append(cluster_profile)
                 per_cluster_counts.append(cluster_counts)
 
-        return per_cluster_profiles, per_cluster_counts, cluster_weights, per_cluster_activations
+        return (
+            per_cluster_profiles,
+            per_cluster_counts,
+            cluster_weights,
+            per_cluster_activations,
+        )
 
 
 class PerClusterHead(nn.Module):
-    def __init__(self, shape_filters=512, profile_kernel_size=75, counts_head_mlp_layers=3, num_tasks=1) -> None:
+    def __init__(
+        self,
+        shape_filters=512,
+        profile_kernel_size=75,
+        counts_head_mlp_layers=3,
+        num_tasks=1,
+    ) -> None:
         super().__init__()
 
         self.shape_head = nn.Sequential()
         for _ in range(counts_head_mlp_layers):
             self.shape_head.append(nn.LazyConv1d(shape_filters, kernel_size=1))
             self.shape_head.append(nn.ELU())
-        self.shape_head.append(nn.LazyConv1d(num_tasks, kernel_size=profile_kernel_size, padding="valid"))
+        self.shape_head.append(
+            nn.LazyConv1d(num_tasks, kernel_size=profile_kernel_size, padding=0)
+        )
         self.counts_head = nn.Sequential()
         for _ in range(counts_head_mlp_layers):
             self.counts_head.append(nn.LazyLinear(shape_filters, bias=False))
@@ -155,7 +195,9 @@ class PerClusterHead(nn.Module):
         self.shape_act = nn.Softmax(dim=2)
         self.counts_act = nn.Softplus()
 
-    def forward(self, x: tuple[torch.Tensor, torch.Tensor]) -> tuple[torch.Tensor, torch.Tensor]:
+    def forward(
+        self, x: tuple[torch.Tensor, torch.Tensor]
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         """
 
         Parameters
@@ -171,69 +213,105 @@ class PerClusterHead(nn.Module):
         counts : torch.Tensor
             Shape: batch, num_tasks
         """
-        seq_gap = x[0].mean(axis=2)
+        seq_gap = x[0].mean(dim=2)
 
-        shape = self.shape_head(torch.hstack([x[0], x[1]]))  # (batch, strands, target_length)
-        counts = self.counts_head(torch.hstack([seq_gap, x[1].mean(axis=2)]))
+        shape = self.shape_head(
+            torch.hstack([x[0], x[1]])
+        )  # (batch, strands, target_length)
+        counts = self.counts_head(torch.hstack([seq_gap, x[1].mean(dim=2)]))
         return self.shape_act(shape), self.counts_act(counts)
 
 
 class Regressor(nn.Module):
     def __init__(
-            self, expected_clusters: int,
-            profile_shrinkage=1, filters=512, n_non_dil_layers=0, non_dil_kernel_size=3,
-            n_dil_layers=8, dil_kernel_size=3, conv1_kernel_size=21, profile_kernel_size=75,
-            counts_head_mlp_layers=3, num_tasks=1, gru_layers=1, gru_dropout=0.1, n_times_more_embeddings=2,
-            scale_function_placement: str = "late-ch") -> None:
-
+        self,
+        expected_clusters: int,
+        profile_shrinkage=1,
+        filters=512,
+        n_non_dil_layers=0,
+        non_dil_kernel_size=3,
+        n_dil_layers=8,
+        dil_kernel_size=3,
+        conv1_kernel_size=21,
+        profile_kernel_size=75,
+        counts_head_mlp_layers=3,
+        num_tasks=1,
+        gru_layers=1,
+        gru_dropout=0.1,
+        n_times_more_embeddings=2,
+        scale_function_placement: str = "late-ch",
+    ) -> None:
         super().__init__()
         self.expected_clusters = expected_clusters
         n_profile_filters = int(filters / profile_shrinkage)
 
         # first convolution without dilation
-        self.motif_detector = nn.Sequential(nn.Conv1d(
-            4, filters, kernel_size=conv1_kernel_size, padding="valid"))
+        self.motif_detector = nn.Sequential(
+            nn.Conv1d(4, filters, kernel_size=conv1_kernel_size, padding="valid")
+        )
         self.filter_gates = nn.ModuleList(
-            [nn.LazyLinear(filters * n_times_more_embeddings, bias=False) for _ in range(expected_clusters)])
-        self.profile_refiner = nn.GRU(input_size=1, hidden_size=n_profile_filters,
-                                      num_layers=gru_layers, dropout=gru_dropout,
-                                      batch_first=True, bidirectional=True)
+            [
+                nn.LazyLinear(filters * n_times_more_embeddings, bias=False)
+                for _ in range(expected_clusters)
+            ]
+        )
+        self.profile_refiner = nn.GRU(
+            input_size=1,
+            hidden_size=n_profile_filters,
+            num_layers=gru_layers,
+            dropout=gru_dropout,
+            batch_first=True,
+            bidirectional=True,
+        )
 
         for _ in range(n_non_dil_layers):
             self.motif_detector.append(
-                ResidualConv(filters=filters, kernel_size=non_dil_kernel_size,
-                             dilation_rate=1)
+                ResidualConv(
+                    filters=filters, kernel_size=non_dil_kernel_size, dilation_rate=1
+                )
             )
 
         for i in range(n_dil_layers):
             if i < n_dil_layers - 1:
                 self.motif_detector.append(
-                    ResidualConv(filters=filters, kernel_size=dil_kernel_size,
-                                 dilation_rate=2 ** (i + 1))
+                    ResidualConv(
+                        filters=filters,
+                        kernel_size=dil_kernel_size,
+                        dilation_rate=2 ** (i + 1),
+                    )
                 )
             else:
                 self.motif_detector.append(
-                    ResidualConvWithXProjection(filters=filters * n_times_more_embeddings, kernel_size=dil_kernel_size,
-                                                dilation_rate=2 ** (i + 1))
+                    ResidualConvWithXProjection(
+                        filters=filters * n_times_more_embeddings,
+                        kernel_size=dil_kernel_size,
+                        dilation_rate=2 ** (i + 1),
+                    )
                 )
 
         self.per_cluster_preds = nn.ModuleList()
         for _ in range(self.expected_clusters):
             self.per_cluster_preds.append(
                 PerClusterHead(
-                    shape_filters=filters, profile_kernel_size=profile_kernel_size,
-                    counts_head_mlp_layers=counts_head_mlp_layers, num_tasks=num_tasks
-                ))
+                    shape_filters=filters,
+                    profile_kernel_size=profile_kernel_size,
+                    counts_head_mlp_layers=counts_head_mlp_layers,
+                    num_tasks=num_tasks,
+                )
+            )
 
         self.scale_function_placement = scale_function_placement
 
-    def forward(self, x: Tuple[torch.Tensor, torch.Tensor], per_cluster_load: torch.Tensor) -> tuple[
-        list[torch.Tensor], list[torch.Tensor], torch.Tensor, list[torch.Tensor]]:
+    def forward(
+        self, x: tuple[torch.Tensor, torch.Tensor], per_cluster_load: torch.Tensor
+    ) -> tuple[
+        list[torch.Tensor], list[torch.Tensor], torch.Tensor, list[torch.Tensor]
+    ]:
         """Forward propagation
 
         Parameters
         ----------
-        x : Tuple[torch.Tensor, torch.Tensor]
+        x : tuple[torch.Tensor, torch.Tensor]
             seq: Shape: batch, ATCG, window_size
             atac: Shape: batch, n_clusters, window_size
         per_cluster_load : torch.Tensor
@@ -261,17 +339,24 @@ class Regressor(nn.Module):
 
         for cluster_id in range(self.expected_clusters):
             cw = cluster_weights[:, cluster_id]
-            profiles, _ = self.profile_refiner(atac[:, cluster_id, :].unsqueeze(2))  # shape: batch, filters_2, seq_len
-            profiles = torch.swapaxes(profiles, 1, 2)[:, :, atac_truncation:-atac_truncation]
+            profiles, _ = self.profile_refiner(
+                atac[:, cluster_id, :].unsqueeze(2)
+            )  # shape: batch, filters_2, seq_len
+            profiles = torch.swapaxes(profiles, 1, 2)[
+                :, :, atac_truncation:-atac_truncation
+            ]
 
             gates = torch.sigmoid(self.filter_gates[cluster_id](motifs_gap))
             filtered_activations = motifs * gates[:, :, None]
 
             if self.scale_function_placement == "early":
                 cluster_profile, cluster_counts = self.per_cluster_preds[cluster_id](
-                    (filtered_activations * cw[:, None, None], profiles))
+                    (filtered_activations * cw[:, None, None], profiles)
+                )
             else:
-                cluster_profile, cluster_counts = self.per_cluster_preds[cluster_id]((filtered_activations, profiles))
+                cluster_profile, cluster_counts = self.per_cluster_preds[cluster_id](
+                    (filtered_activations, profiles)
+                )
             if self.scale_function_placement == "late":
                 per_cluster_profiles.append(cluster_profile * cw[:, None, None])
                 per_cluster_counts.append(cluster_counts * cw[:, None])
@@ -283,4 +368,9 @@ class Regressor(nn.Module):
                 per_cluster_counts.append(cluster_counts)
             per_cluster_activations.append(gates)
 
-        return per_cluster_profiles, per_cluster_counts, cluster_weights, per_cluster_activations
+        return (
+            per_cluster_profiles,
+            per_cluster_counts,
+            cluster_weights,
+            per_cluster_activations,
+        )
