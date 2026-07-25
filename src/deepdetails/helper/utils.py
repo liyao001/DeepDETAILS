@@ -7,7 +7,7 @@ import shutil
 import subprocess
 import unicodedata
 from datetime import datetime
-from typing import List, Optional, Sequence, Tuple, Union
+from typing import List, Optional, Sequence, Union
 from urllib.request import urlopen
 
 import numpy as np
@@ -15,12 +15,16 @@ import pybedtools
 import pytorch_lightning as pl
 import torch
 import wandb
+from lightning_fabric.loggers import Logger as FabricLogger
 from pytorch_lightning import loggers
-from pytorch_lightning.callbacks import ModelCheckpoint, ModelSummary
+from pytorch_lightning.callbacks import Callback, ModelCheckpoint, ModelSummary
 from pytorch_lightning.callbacks.early_stopping import EarlyStopping
 from pytorch_lightning.loggers import CSVLogger, WandbLogger
+from pytorch_lightning.loggers import Logger as PLLogger
 
 from deepdetails.par_description import PARAM_DESC
+
+LightningLogger = PLLogger | FabricLogger
 
 REQUIRED_BINARIES = ("bedtools", "bedGraphToBigWig", "sort")
 _PYPI_JSON_URL = "https://pypi.org/pypi/DeepDETAILS/json"
@@ -48,7 +52,9 @@ def check_update(timeout: float = 5.0) -> None:
     Set ``DEEPDETAILS_SKIP_UPDATE_CHECK=1`` to skip this check.
     """
     if os.environ.get("DEEPDETAILS_SKIP_UPDATE_CHECK", "").strip().lower() in {
-        "1", "true", "yes",
+        "1",
+        "true",
+        "yes",
     }:
         return
 
@@ -56,7 +62,9 @@ def check_update(timeout: float = 5.0) -> None:
         from deepdetails.__about__ import __version__ as local_version
 
         with urlopen(_PYPI_JSON_URL, timeout=timeout) as response:
-            remote_version = json.loads(response.read().decode()).get("info", {}).get("version")
+            remote_version = (
+                json.loads(response.read().decode()).get("info", {}).get("version")
+            )
         if not remote_version:
             return
 
@@ -124,12 +132,23 @@ def run_command(cmd: Union[str, Sequence[str]], raise_exception: bool = False):
     return proc.stdout, proc.stderr, proc.returncode
 
 
-def get_trainer(study_name: str, save_to: str = ".", min_delta: float = 0, earlystop_patience: int = 3,
-                max_epochs: int = 200, save_top_k_model: Union[str, int] = 1, hide_progress_bar: bool = False,
-                model_summary_depth: int = 6, version: Optional[str] = None, accelerator: Optional[str] = "auto",
-                devices: Union[List[int], str, int] = "auto", wandb_project: Optional[str] = None,
-                wandb_entity: Optional[str] = None, wandb_upload_model: Union[str, bool] = False,
-                pass_mark: str = "1st") -> Tuple[pl.Trainer, str]:
+def get_trainer(
+    study_name: str,
+    save_to: str = ".",
+    min_delta: float = 0,
+    earlystop_patience: int = 3,
+    max_epochs: int = 200,
+    save_top_k_model: Union[str, int] = 1,
+    hide_progress_bar: bool = False,
+    model_summary_depth: int = 6,
+    version: Optional[str] = None,
+    accelerator: str = "auto",
+    devices: Union[Sequence[int], str, int] = "auto",
+    wandb_project: Optional[str] = None,
+    wandb_entity: Optional[str] = None,
+    wandb_upload_model: Union[str, bool] = False,
+    pass_mark: str = "1st",
+) -> tuple[pl.Trainer, str]:
     """
     Get pl.Trainer for training / inference, etc.
 
@@ -177,44 +196,82 @@ def get_trainer(study_name: str, save_to: str = ".", min_delta: float = 0, early
     wandb.finish()
 
     pass_str = f"_{pass_mark}" if pass_mark else ""
-    ver_str = f"{version}{pass_str}" if version else datetime.now().strftime("%y%m%d%H%M%S")
+    ver_str = (
+        f"{version}{pass_str}" if version else datetime.now().strftime("%y%m%d%H%M%S")
+    )
+
+    # Normalize sequences to list for Lightning's Trainer typing.
+    trainer_devices: Union[list[int], str, int]
+    if isinstance(devices, (str, int)):
+        trainer_devices = devices
+    else:
+        trainer_devices = list(devices)
 
     # CPUAccelerator expects `devices` to be a plain positive int, not a list.
-    is_cpu_accelerator = accelerator == "cpu" or (accelerator == "auto" and not torch.cuda.is_available())
-    if is_cpu_accelerator and isinstance(devices, list):
-        devices = max(len(devices), 1)
+    is_cpu_accelerator = accelerator == "cpu" or (
+        accelerator == "auto" and not torch.cuda.is_available()
+    )
+    if is_cpu_accelerator and isinstance(trainer_devices, list):
+        trainer_devices = max(len(trainer_devices), 1)
 
-    is_multi_gpu = isinstance(devices, list) and len(devices) > 1 and accelerator != "cpu"
+    is_multi_gpu = (
+        isinstance(trainer_devices, list)
+        and len(trainer_devices) > 1
+        and accelerator != "cpu"
+    )
 
     if not is_multi_gpu:
-        wbl = WandbLogger(name=f"{study_name}{pass_str}", project=wandb_project, version=ver_str,
-                          reinit=True, entity=wandb_entity,
-                          log_model=wandb_upload_model, save_dir=save_to, offline=True,
-                          settings=wandb.Settings(start_method="fork"))
+        wbl = WandbLogger(
+            name=f"{study_name}{pass_str}",
+            project=wandb_project,
+            version=ver_str,
+            reinit=True,
+            entity=wandb_entity,
+            log_model=wandb_upload_model,  # pyrefly: ignore[bad-argument-type]
+            save_dir=save_to,
+            offline=True,
+            settings=wandb.Settings(start_method="fork"),
+        )
         ver = str(wbl.version)
     else:
         wbl = None
         ver = ver_str
 
-    csvl = CSVLogger(name=f"{study_name}{pass_str}", version=ver, save_dir=save_to,
-                     prefix=f"{study_name}{pass_str}")
-
-    checkpoint_callback = ModelCheckpoint(monitor=training_readout, save_top_k=save_top_k_model,
-                                          dirpath=os.path.join(save_to, study_name, ver))
-    early_stop_callback = EarlyStopping(
-        monitor=training_readout, min_delta=min_delta,
-        patience=earlystop_patience, verbose=True, mode="min"
+    csvl = CSVLogger(
+        name=f"{study_name}{pass_str}",
+        version=ver,
+        save_dir=save_to,
+        prefix=f"{study_name}{pass_str}",
     )
-    callbacks = [early_stop_callback,
-                 checkpoint_callback,
-                 ModelSummary(max_depth=model_summary_depth),]
+
+    save_top_k = (
+        save_top_k_model if isinstance(save_top_k_model, int) else int(save_top_k_model)
+    )
+    checkpoint_callback = ModelCheckpoint(
+        monitor=training_readout,
+        save_top_k=save_top_k,
+        dirpath=os.path.join(save_to, study_name, ver),
+    )
+    early_stop_callback = EarlyStopping(
+        monitor=training_readout,
+        min_delta=min_delta,
+        patience=earlystop_patience,
+        verbose=True,
+        mode="min",
+    )
+    callbacks: list[Callback] = [
+        early_stop_callback,
+        checkpoint_callback,
+        ModelSummary(max_depth=model_summary_depth),
+    ]
     trainer_obj = pl.Trainer(
         logger=[wbl, csvl] if wbl is not None else [csvl],
         enable_checkpointing=True,
         max_epochs=max_epochs,
-        accelerator=accelerator, devices=devices,
+        accelerator=accelerator,
+        devices=trainer_devices,
         callbacks=callbacks,
-        enable_progress_bar=False if hide_progress_bar else True
+        enable_progress_bar=False if hide_progress_bar else True,
     )
     return trainer_obj, ver
 
@@ -239,8 +296,8 @@ def internal_qc(metrics: list[float], pred_counts: torch.Tensor):
     qc_result_sum : bool
         Total sum based QC result
     """
-    qc_val = 0.
-    later = 0.
+    qc_val = 0.0
+    later = 0.0
     if len(metrics) > 20:
         obs = metrics[:10] + metrics[-10:]
     elif len(metrics) > 2:
@@ -249,25 +306,30 @@ def internal_qc(metrics: list[float], pred_counts: torch.Tensor):
         obs = None
     if obs is not None:
         n_steps = len(obs)
-        early = np.mean(obs[:n_steps // 2]) + 10e-16
-        later = np.mean(obs[n_steps // 2:]) + 10e-16
+        early = np.mean(obs[: n_steps // 2]) + 10e-16
+        later = np.mean(obs[n_steps // 2 :]) + 10e-16
         qc_val = early / later
 
-    cr_sum_collapsed = torch.isclose(pred_counts, torch.zeros_like(pred_counts), atol=0.1).sum().item() == 0
-    cr_br_cor = qc_val > 1. or later < 0.4
+    cr_sum_collapsed = (
+        torch.isclose(pred_counts, torch.zeros_like(pred_counts), atol=0.1).sum().item()
+        == 0
+    )
+    cr_br_cor = qc_val > 1.0 or later < 0.4
     return (float(qc_val), pred_counts.tolist()), cr_br_cor, cr_sum_collapsed
 
 
-def calc_counts_per_locus(profiles: Union[Tuple[torch.Tensor, ...], List[torch.Tensor]],
-                          counts: Union[Tuple[torch.Tensor, ...], List[torch.Tensor]],
-                          is_per_cluster_profile: bool = False) -> torch.Tensor:
+def calc_counts_per_locus(
+    profiles: Union[tuple[torch.Tensor, ...], List[torch.Tensor]],
+    counts: Union[tuple[torch.Tensor, ...], List[torch.Tensor]],
+    is_per_cluster_profile: bool = False,
+) -> torch.Tensor:
     """Calculate read counts per genomic locus
 
     Parameters
     ----------
-    profiles : Union[Tuple[torch.Tensor, ...], List[torch.Tensor]]
+    profiles : Union[tuple[torch.Tensor, ...], List[torch.Tensor]]
         List of `torch.Tensor`, each Tensor stores the unnormed predictions for a cluster
-    counts : Union[Tuple[torch.Tensor, ...], List[torch.Tensor]]
+    counts : Union[tuple[torch.Tensor, ...], List[torch.Tensor]]
         List of `torch.Tensor`, each Tensor stores the read counts for a cluster
     is_per_cluster_profile : bool, optional
         Set this as True if you want the function to return cluster-specific predictions, by default False
@@ -278,15 +340,19 @@ def calc_counts_per_locus(profiles: Union[Tuple[torch.Tensor, ...], List[torch.T
         Transformed predictions. Shape: clusters, batch, strands, seq_len if is_per_cluster_profile is True
         batch, strands, seq_len if is_per_cluster_profile if False
     """
-    profiles = torch.stack(profiles, dim=0)  # output format: n_clusters, batch, strand, seq_len
-    counts = torch.stack(counts, dim=0)  # output format: n_clusters, batch, strand
+    stacked_profiles = torch.stack(profiles, dim=0)
+    stacked_counts = torch.stack(counts, dim=0)
 
-    reshaped_counts = counts.repeat(1, 1, profiles.shape[-1]).view(counts.shape[0], counts.shape[1], -1,
-                                                                   counts.shape[2])
+    reshaped_counts = stacked_counts.repeat(1, 1, stacked_profiles.shape[-1]).view(
+        stacked_counts.shape[0],
+        stacked_counts.shape[1],
+        -1,
+        stacked_counts.shape[2],
+    )
     reshaped_counts = torch.swapaxes(reshaped_counts, 2, 3)
 
     # cluster-specific predictions
-    preds = profiles * reshaped_counts
+    preds = stacked_profiles * reshaped_counts
 
     if not is_per_cluster_profile:
         # aggregated predictions
@@ -294,9 +360,13 @@ def calc_counts_per_locus(profiles: Union[Tuple[torch.Tensor, ...], List[torch.T
     return preds
 
 
-def rescaling_prediction(pc_profiles: list[torch.Tensor], pc_counts: list[torch.Tensor],
-                         expected_bulk_counts: torch.Tensor, expected_bulk_profiles: torch.Tensor,
-                         rescaling_mode: int = 0) -> torch.Tensor:
+def rescaling_prediction(
+    pc_profiles: list[torch.Tensor],
+    pc_counts: list[torch.Tensor],
+    expected_bulk_counts: torch.Tensor,
+    expected_bulk_profiles: torch.Tensor,
+    rescaling_mode: int = 0,
+) -> np.ndarray:
     """Rescale predictions based on the observed bulk profiles
 
     Parameters
@@ -325,13 +395,15 @@ def rescaling_prediction(pc_profiles: list[torch.Tensor], pc_counts: list[torch.
 
     if rescaling_mode == 1:  # total counts
         # predicted bulk counts
-        ps_counts = torch.stack(pc_counts).sum(axis=0)
+        ps_counts = torch.stack(pc_counts).sum(dim=0)
         # calculate rescale factor (k)
         # k * y_hat = y
         k = expected_bulk_counts / torch.clamp(ps_counts, min=1e-15)
         # get the rescaled counts
         pc_counts = [pcc * k for pcc in pc_counts]
-        cluster_preds = calc_counts_per_locus(pc_profiles, pc_counts, True).cpu().numpy()
+        cluster_preds = (
+            calc_counts_per_locus(pc_profiles, pc_counts, True).cpu().numpy()
+        )
     elif rescaling_mode == 2:  # per-bp counts
         bulk_preds = cluster_preds.sum(axis=0)
         # calculate rescale factor (k)
@@ -342,7 +414,7 @@ def rescaling_prediction(pc_profiles: list[torch.Tensor], pc_counts: list[torch.
     return cluster_preds
 
 
-def get_log_dir(logger: loggers.Logger):
+def get_log_dir(logger: LightningLogger | None):
     """
     Get log directory
 
@@ -360,7 +432,11 @@ def get_log_dir(logger: loggers.Logger):
     """
     try:
         if isinstance(logger, loggers.WandbLogger):
-            log_dir = os.path.join(logger.save_dir, logger._name, logger.version)
+            log_dir = os.path.join(
+                logger.save_dir or ".",
+                logger._name or "",
+                str(logger.version or ""),
+            )
             version = logger.version
         elif isinstance(logger, loggers.TensorBoardLogger):
             log_dir = logger.log_dir
@@ -374,7 +450,9 @@ def get_log_dir(logger: loggers.Logger):
     return log_dir, version
 
 
-def transform_counts(values: torch.Tensor, inject_random_noise: float = 10e-16, method: str = "asinh") -> torch.Tensor:
+def transform_counts(
+    values: torch.Tensor, inject_random_noise: float = 10e-16, method: str = "asinh"
+) -> torch.Tensor:
     """
     Get asinh/log- transformed counts
 
@@ -438,11 +516,20 @@ def set_tmp_for_pbt(tmp_dir="."):
     current_tmp_dir = pybedtools.get_tempdir()
     # if pybedtools is using the system's default tmp dir.,
     # then switch to current working directory to avoid using up all spaces at `/`
-    if current_tmp_dir in ("/tmp", "/var/tmp", "/usr/tmp", "C:\\TEMP", "C:\\TMP", "\\TMP"):
+    if current_tmp_dir in (
+        "/tmp",
+        "/var/tmp",
+        "/usr/tmp",
+        "C:\\TEMP",
+        "C:\\TMP",
+        "\\TMP",
+    ):
         pybedtools.set_tempdir(tmp_dir)
 
 
-def bedgraph_to_bigwig(in_bedgraph_path: str, out_bigwig_path: str, chrom_size_path: str):
+def bedgraph_to_bigwig(
+    in_bedgraph_path: str, out_bigwig_path: str, chrom_size_path: str
+):
     """
     Convert a file in bedGraph format to bigWig format
 
@@ -476,7 +563,10 @@ def bedgraph_to_bigwig(in_bedgraph_path: str, out_bigwig_path: str, chrom_size_p
 
     # convert the filtered bedGraph file into bigWig format
     try:
-        run_command(["bedGraphToBigWig", tmp_file, chrom_size_path, out_bigwig_path], raise_exception=True)
+        run_command(
+            ["bedGraphToBigWig", tmp_file, chrom_size_path, out_bigwig_path],
+            raise_exception=True,
+        )
     except RuntimeError as e:
         if str(e).find("not case-sensitive sorted") != -1:
             sorted_file = f"{tmp_file}.sorted"
@@ -491,7 +581,10 @@ def bedgraph_to_bigwig(in_bedgraph_path: str, out_bigwig_path: str, chrom_size_p
             if proc.returncode != 0:
                 raise RuntimeError(proc.stderr) from e
             try:
-                run_command(["bedGraphToBigWig", sorted_file, chrom_size_path, out_bigwig_path], raise_exception=True)
+                run_command(
+                    ["bedGraphToBigWig", sorted_file, chrom_size_path, out_bigwig_path],
+                    raise_exception=True,
+                )
             finally:
                 if os.path.exists(sorted_file):
                     os.remove(sorted_file)

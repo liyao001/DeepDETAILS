@@ -38,14 +38,14 @@ PARAM_DESC = {
     "redundancy_loss_coef": "Redundancy loss coefficient",
     "prior_loss_coef": "Prior loss coefficient",
     "disable_final_rescaling": "By default, DETAILS adjusts the final exported predictions so they have scales identical"
-                               " to the bulk library. By setting this switch, you can disable this adjustment.",
+    " to the bulk library. By setting this switch, you can disable this adjustment.",
     "rescaling_mode": RescalingMode.help_text(),
     "gamma": "This small scalar is applied to the injected linear pattern in calculating redundancy "
-             "reduction terms for preventing trivial solutions.",
+    "reduction terms for preventing trivial solutions.",
     "save_preds": "Set this switch to save final predictions. Specify --no-preds if you don't want to save predictions.",
     "resume_from_ckpt": "Path of the checkpoint from which deconvolution is resumed.",
     "all_regions": "Train models with both peak and background regions. This is the default behavior. "
-                   "Specify --peak-only if you want to only use peak regions",
+    "Specify --peak-only if you want to only use peak regions",
     "peak_only": "Train models with peak regions only.",
     "test_pos_only": "Evaluate models only on non-background regions.",
     "chrom_cv": "Use chromosomal cross-validation.",
@@ -60,10 +60,10 @@ PARAM_DESC = {
     "accessibility": "Cluster/cell type specific accessibility tracks, preferably depth normalized.",
     "fragments": "Fragment file for the sc/snATAC experiment (in tsv format).",
     "barcodes": "A tab-separated file describing cell type annotations for cells captured in the sc/snATAC experiment."
-                "It should have two columns (no header): "
-                "* the first column stores the cell barcode "
-                "* the second column stores the cluster label. "
-                "The barcodes in this file should match barcodes in fragments.",
+    "It should have two columns (no header): "
+    "* the first column stores the cell barcode "
+    "* the second column stores the cluster label. "
+    "The barcodes in this file should match barcodes in fragments.",
     "chrom_size": "Path to the chromosome size file",
     "genome_fa": "Path to the genome sequence file",
     "background_sampling_ratio": "Sample background regions according to the number of peak regions. If ratio is 1, equal number will be sampled.",
@@ -90,7 +90,7 @@ PARAM_DESC = {
     "qval_cutoff": "Q-value cutoff for a region to be considered a signature",
     "fc_cutoff": "Fold-change cutoff for a region to be considered a signature",
     "collapse_missing_cell_types": "Enable the option to group cell types that are present in the reference but not "
-                                   "found in the bulk (as determined by preflight check) into a separate category called 'Others.'",
+    "found in the bulk (as determined by preflight check) into a separate category called 'Others.'",
     "combine_cell_types": "Combine the following cell types into others. This will enable `collapse_missing_cell_types`",
     # parameters for a dynamic dataset
     "fa_file": "Genome fasta file, should have a companion index file (.fai)",
@@ -125,33 +125,33 @@ PARAM_DESC = {
     "batch_size": "Batch size",
     "num_workers": "How many subprocesses to use for data loading. 0 means that the data will be loaded in the main process.",
     "min_delta": "Minimum change in the monitored quantity to qualify as an improvement,"
-                 "i.e. an absolute change of less than or equal to min_delta, will count as no improvement.",
+    "i.e. an absolute change of less than or equal to min_delta, will count as no improvement.",
     "earlystop_patience": "Number of checks with no improvement after which training will be stopped."
-                          "Under the default configuration, one check happens after every training epoch.",
+    "Under the default configuration, one check happens after every training epoch.",
     "max_epochs": "Stop training once this number of epochs is reached.",
     "learning_rate": "Learning rate",
     "lr_step_size": "Period of learning rate decay",
     "lr_gamma": "Multiplicative factor of learning rate decay. Default: 0.1.",
     "betas": "Coefficients used for computing running averages of gradient and its square",
     "save_top_k_model": "The best k models according to the quantity monitored will be saved. "
-                        "If k == 0, no models are saved. If k == -1, all models are saved.",
+    "If k == 0, no models are saved. If k == -1, all models are saved.",
     "hide_progress_bar": "Whether to hide the progress bar.",
     "max_depth": "The maximum depth of layer nesting that the summary will include.",
     "accelerator": "Accelerator for training / inference. Values can be 'gpu', 'tpu', 'auto', 'cpu', or 'ipu'.",
     "devices": "The devices to use. Can be set to a positive number (int), a sequence of device indices"
-               "(list), the value -1 to indicate all available devices should be used, or 'auto' for"
-               "automatic selection based on the chosen accelerator.",
+    "(list), the value -1 to indicate all available devices should be used, or 'auto' for"
+    "automatic selection based on the chosen accelerator.",
     "device": "Use this device to do calculation",
     "wandb_version": "Version for WandB logging",
     "wandb_project": "The name of the project to which this run will belong."
-                     "If not set, the environment variable WANDB_PROJECT will be used as a fallback."
-                     "If both are not set, it defaults to 'lightning_logs'.",
+    "If not set, the environment variable WANDB_PROJECT will be used as a fallback."
+    "If both are not set, it defaults to 'lightning_logs'.",
     "wandb_entity": "WandB username or team name. This entity must exist before you can send runs to WandB's server.",
     "wandb_upload_model": "Log checkpoints as W&B artifacts. Latest and best aliases are automatically set."
-                          "'all': checkpoints are logged during training."
-                          "True: checkpoints are logged at the end of training, except when save_top_k_model == -1"
-                          "which also logs every checkpoint during training."
-                          "False: (default), no checkpoint is logged.",
+    "'all': checkpoints are logged during training."
+    "True: checkpoints are logged at the end of training, except when save_top_k_model == -1"
+    "which also logs every checkpoint during training."
+    "False: (default), no checkpoint is logged.",
     # parameters for merging predictions
     "pred_dir": "Path to the folder storing all replicate predictions",
     "preds": "Path to hdf5 files for predictions from each replicate run",

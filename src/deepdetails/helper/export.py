@@ -9,8 +9,14 @@ STRAND_LABELS = ("pl", "mn")
 STRAND_COEFF = (1, -1)
 
 
-def preds_to_bg_star(pred_h5: str, cluster_idx: int, strand_idx: int, save_to: str, min_abs_val: float = 10e-3,
-                     bins: int = 0):
+def preds_to_bg_star(
+    pred_h5: str,
+    cluster_idx: int,
+    strand_idx: int,
+    save_to: str,
+    min_abs_val: float = 10e-3,
+    bins: int = 0,
+):
     """Convert predictions to bedGraph files
 
     Parameters
@@ -35,7 +41,12 @@ def preds_to_bg_star(pred_h5: str, cluster_idx: int, strand_idx: int, save_to: s
     """
     with h5py.File(pred_h5, "r") as f:
         regions = parse_regions(f)
-        cluster_preds, chroms, starts, ends = f["preds"], regions[0], regions[1], regions[2]
+        cluster_preds, chroms, starts, ends = (
+            f["preds"],
+            regions[0],
+            regions[1],
+            regions[2],
+        )
 
         output_name = f"C{cluster_idx}.{STRAND_LABELS[strand_idx]}.bg"
         fh = open(os.path.join(save_to, output_name), "w")
@@ -49,14 +60,22 @@ def preds_to_bg_star(pred_h5: str, cluster_idx: int, strand_idx: int, save_to: s
                 sample_pred = sample_pred.reshape(-1, bins).mean(axis=1)
 
             fh.writelines(
-                [f"{chroms[r_i]}\t{coords[i]}\t{coords1[i]}\t{sample_pred[i]}\n" for i in
-                 np.where(np.abs(sample_pred) > min_abs_val)[0]]
+                [
+                    f"{chroms[r_i]}\t{coords[i]}\t{coords1[i]}\t{sample_pred[i]}\n"
+                    for i in np.where(np.abs(sample_pred) > min_abs_val)[0]
+                ]
             )
         fh.close()
     return output_name
 
 
-def bg_to_bw_core(bg_file: str, prefix: str, chrom_size: str, coef: int = 1, skip_sort_merge: bool = False) -> str:
+def bg_to_bw_core(
+    bg_file: str,
+    prefix: str,
+    chrom_size: str,
+    coef: int = 1,
+    skip_sort_merge: bool = False,
+) -> str:
     """Convert bedGraph files to bigWigs
 
     Parameters
@@ -86,12 +105,12 @@ def bg_to_bw_core(bg_file: str, prefix: str, chrom_size: str, coef: int = 1, ski
     _house_keeping.append(dest_bg)
     if not skip_sort_merge:
         cmd = f"sort -T . -k1,1 -k2,2n {bg_file} | "
-        cmd += "bedtools merge -i stdin -d -1 -c 4 -o mean | awk 'BEGIN{OFS=\"\\t\";FS=\"\\t\"}"
+        cmd += 'bedtools merge -i stdin -d -1 -c 4 -o mean | awk \'BEGIN{OFS="\\t";FS="\\t"}'
         cmd += f"{{print $1,$2,$3,$4*{coef}}}' > {dest_bg}"
         print(cmd)
         os.system(cmd)
     else:
-        cmd = "awk 'BEGIN{OFS=\"\\t\";FS=\"\\t\"} "
+        cmd = 'awk \'BEGIN{OFS="\\t";FS="\\t"} '
         cmd += f"{{print $1,$2,$3,$4*{coef}}}' "
         cmd += f"{bg_file} > {dest_bg}"
         print(cmd)
