@@ -1193,7 +1193,7 @@ def export_attr(
     -------
 
     """.format(**PARAM_DESC)
-    model = DeepDETAILS.load_from_checkpoint(checkpoint)
+    model = DeepDETAILS.load_from_checkpoint(checkpoint, weights_only=False)
     summarized_model = ModelWithSummarization(model, summarizer="sum").to(device=device)
 
     raw_ds = SequenceSignalDataset(
