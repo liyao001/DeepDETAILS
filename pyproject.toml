@@ -132,3 +132,41 @@ extend-exclude = [
 
 [tool.ruff.lint]
 select = ["E4", "E7", "E9", "F", "I"]
+
+# Pixi workspace: `pixi install` / `pixi shell` set up DeepDETAILS with
+# conda binaries (bedtools, bedGraphToBigWig) plus an editable install.
+[tool.pixi.workspace]
+channels = ["conda-forge", "bioconda"]
+platforms = ["osx-arm64", "linux-64"]
+
+[tool.pixi.dependencies]
+bedtools = "*"
+hatch = "*"
+python = ">=3.10,<3.14"
+ruff = "*"
+twine = "*"
+typos = "*"
+ucsc-bedgraphtobigwig = "*"
+libcurl = ">=8.21.0,<9"
+
+[tool.pixi.pypi-dependencies]
+deepdetails = { path = ".", editable = true, extras = ["dev"] }
+
+# Thin wrappers around Hatch so local/CI entrypoints stay in sync with
+# `[tool.hatch.envs.default.scripts]` and `hatch check`.
+[tool.pixi.tasks]
+check = "hatch check"
+check-code = "hatch check code"
+check-fmt = "hatch check fmt"
+check-types = "hatch check types"
+lint = "hatch run lint"
+ruff = "hatch run lint"
+typos = "hatch run check-typos"
+test = "hatch run test"
+test-data = "hatch run test-data"
+test-fast = "hatch run test-fast"
+test-train = "hatch run test-train"
+test-unit = "hatch run test-unit"
+build = "hatch build"
+check-dist = "hatch run check-dist"
+ci = { depends-on = ["check", "typos", "test-fast", "build", "check-dist"] }
