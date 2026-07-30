@@ -61,8 +61,8 @@ class ReducedDataset(torch.utils.data.Dataset):
         )
         reduced_regions = tmp_bed.to_dataframe(disable_auto_names=True, header=None)
         self.final_data_indexes = []
-        for candidates in reduced_regions[3].str.split(",").values:
-            self.final_data_indexes.extend(candidates[0::2])
+        for candidates in reduced_regions[3].astype(str).str.split(",").values:
+            self.final_data_indexes.extend(int(x) for x in candidates[0::2])
         if subset is not None and len(self.final_data_indexes) > subset:
             self.final_data_indexes = np.random.choice(
                 self.final_data_indexes, subset, replace=False
@@ -321,7 +321,7 @@ def ixg(
     model.eval()
 
     data_iter = DataLoader(
-        dataset, batch_size=batch_size, shuffle=False, num_workers=1, pin_memory=True
+        dataset, batch_size=batch_size, shuffle=False, num_workers=0, pin_memory=True
     )
     n_samples = len(dataset)
     seq_len = dataset.t_x
