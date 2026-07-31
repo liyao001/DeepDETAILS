@@ -239,7 +239,10 @@ def generate_gc_matched_random_regions(
             f"got {region_content_df.shape[1]}."
         )
     act_bins, bin_crit = pd.cut(
-        region_content_df["pct_gc"], bins=bins, retbins=True, labels=False
+        region_content_df["pct_gc"],
+        bins=bins,
+        retbins=True,
+        labels=list(range(bins)),
     )
     per_bin_sampling_target = (act_bins.value_counts() * sample_scale_factor).to_dict()
 
