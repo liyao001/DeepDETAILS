@@ -359,6 +359,7 @@ def ixg(
             x_acc = datum[0][1].to(device, non_blocking=True)
             x_load = datum[4].to(device, non_blocking=True)
             inputs = (x_ohe, x_acc, x_load)
+            sequence_inputs = (x_ohe,)
 
             # save ohe sequences for this batch
             dset_ohe[absolute_start_coord:absolute_end_coord, :, :] = (
@@ -368,30 +369,24 @@ def ixg(
             for target in range(n_clusters):
                 # it is assumed that for all given input tensors, dim 0 is batch
                 with torch.autograd.set_grad_enabled(True):
-                    gradient_mask = apply_gradient_requirements(inputs, warn=False)
+                    gradient_mask = apply_gradient_requirements(
+                        sequence_inputs, warn=False
+                    )
                     outputs = model(*inputs)
 
                     selected_outputs = outputs[target, :]
-                    gradients = torch.autograd.grad(
+                    (sequence_gradient,) = torch.autograd.grad(
                         torch.unbind(selected_outputs),
-                        inputs,
-                        allow_unused=True,
-                        materialize_grads=True,
+                        sequence_inputs,
                     )
-                    attributions = tuple(
-                        input * gradient
-                        if gradient is not None
-                        else torch.zeros_like(input)
-                        for input, gradient in zip(inputs, gradients)
-                    )
-                    contrib = attributions[0]
+                    contrib = x_ohe * sequence_gradient
                     if abs_transform:
                         contrib = contrib.abs()
                     dset_contrib[
                         absolute_start_coord:absolute_end_coord, target, :, :
                     ] = contrib.detach().cpu().numpy()
 
-                    undo_gradient_requirements(inputs, gradient_mask)
+                    undo_gradient_requirements(sequence_inputs, gradient_mask)
     return result_file
 
 
