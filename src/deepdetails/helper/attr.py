@@ -501,11 +501,27 @@ def write_scores_to_bigwigs(
         assert peaks.shape[0] == scores.shape[0]
 
         chrom_sizes = pd.read_csv(chrom_sizes_file, sep="\t", header=None)
+        chrom_sizes[0] = chrom_sizes[0].astype(str)
+        peaks[0] = peaks[0].astype(str)
+
+        # pyBigWig requires chromosome write order to match addHeader / chrom.sizes
+        chrom_order = {chrom: i for i, chrom in enumerate(chrom_sizes[0])}
+        missing = set(peaks[0].unique()) - chrom_order.keys()
+        if missing:
+            raise ValueError(
+                "peaks contain chromosomes missing from chrom sizes file: "
+                + ", ".join(sorted(missing))
+            )
+        peaks = (
+            peaks.assign(_ord=peaks[0].map(chrom_order))
+            .sort_values(["_ord", 1], kind="mergesort")
+            .drop(columns="_ord")
+        )
 
         with pyBigWig.open(save_to, "w") as bw:
             bw.addHeader([tuple(p) for p in chrom_sizes.values.tolist()])
 
-            for chrom, sub_df in peaks.groupby(0):
+            for chrom, sub_df in peaks.groupby(0, sort=False):
                 print(f"Adding signals on chromosome {chrom}...")
 
                 track_values_dict = make_track_values_dict(
