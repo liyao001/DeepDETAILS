@@ -133,28 +133,37 @@ extend-exclude = [
 [tool.ruff.lint]
 select = ["E4", "E7", "E9", "F", "I"]
 
-# Pixi workspace: `pixi install` / `pixi shell` set up DeepDETAILS with
-# conda binaries (bedtools, bedGraphToBigWig) plus an editable install.
+# Pixi workspace.
+#   pixi shell              runtime env (CLI + bedtools / bedGraphToBigWig)
+#   pixi shell -e dev       plus hatch, pytest, ruff, typos, twine
+#   pixi run -e dev test    developer tasks
 [tool.pixi.workspace]
 channels = ["conda-forge", "bioconda"]
 platforms = ["osx-arm64", "linux-64"]
 
 [tool.pixi.dependencies]
 bedtools = "*"
-hatch = "*"
 python = ">=3.10,<3.14"
-ruff = "*"
-twine = "*"
-typos = "*"
 ucsc-bedgraphtobigwig = "*"
 libcurl = ">=8.21.0,<9"
 
 [tool.pixi.pypi-dependencies]
-deepdetails = { path = ".", editable = true, extras = ["dev"] }
+deepdetails = { path = ".", editable = true }
 
-# Thin wrappers around Hatch so local/CI entrypoints stay in sync with
-# `[tool.hatch.envs.default.scripts]` and `hatch check`.
-[tool.pixi.tasks]
+[tool.pixi.feature.dev.dependencies]
+hatch = "*"
+ruff = "*"
+twine = "*"
+typos = "*"
+
+# `dev` optional-dependencies (pytest, ruff, ...) are pulled in via features = ["dev"]
+
+[tool.pixi.environments]
+default = { features = [], solve-group = "default" }
+dev = { features = ["dev"], solve-group = "default" }
+
+# Developer tasks live on the dev feature so `pixi run test` selects that env.
+[tool.pixi.feature.dev.tasks]
 check = "hatch check"
 check-code = "hatch check code"
 check-fmt = "hatch check fmt"
