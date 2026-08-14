@@ -2,7 +2,6 @@ from typing import Optional, TypeAlias, Union
 
 import pytorch_lightning as pl
 import torch
-import torchmetrics
 from einops import rearrange
 
 from deepdetails.helper.inspection import (
@@ -181,13 +180,6 @@ class DeepDETAILS(pl.LightningModule):
         self.lr_step_size = lr_step_size
         self.lr_gamma = lr_gamma
         self.betas = betas
-        self.pearsonr = torchmetrics.PearsonCorrCoef()
-        self.val_pearsonr = torchmetrics.PearsonCorrCoef()
-        # ct: counts, r: Pearson's R, rr: "Rank" R, sl: strandless
-        self.test_pearsonr = torchmetrics.PearsonCorrCoef()
-        self.test_pc_pearsons = torch.nn.ModuleList(
-            [torchmetrics.PearsonCorrCoef() for _ in range(expected_clusters)]
-        )
         self.version = version
         self.test_screenshot_ratio = test_screenshot_ratio
         self.gamma = gamma
@@ -206,6 +198,14 @@ class DeepDETAILS(pl.LightningModule):
 
     def forward(self, x, loads):
         return self.model(x, loads)
+
+    @staticmethod
+    def _batch_pearson(pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+        # per-batch r so Lightning's on_epoch mean stays sensitive to bad batches.
+        x = torch.stack(
+            [transform_counts(pred.flatten()), transform_counts(target.flatten())]
+        )
+        return corrcoef_stable(x)[0, 1]
 
     def training_step(self, batch: DeepDETAILSBatch, batch_idx: int):
         x, expected_counts, expected_profiles, _, loads, misc = batch
@@ -261,10 +261,7 @@ class DeepDETAILS(pl.LightningModule):
         else:
             loss = msle_loss + branch_corrs * self.redundancy_loss_coef
 
-        cor = self.pearsonr(
-            transform_counts(preds.flatten()),
-            transform_counts(expected_profiles.flatten()),
-        )
+        cor = self._batch_pearson(preds, expected_profiles)
 
         self.log(
             "train_loss",
@@ -290,10 +287,7 @@ class DeepDETAILS(pl.LightningModule):
 
         self.log("val_loss", loss, batch_size=batch_size, prog_bar=True)
 
-        val_cor = self.val_pearsonr(
-            transform_counts(preds.flatten()),
-            transform_counts(expected_profiles.flatten()),
-        )
+        val_cor = self._batch_pearson(preds, expected_profiles)
 
         if torch.rand(1)[0] < 0.1:
             bulk_visual_inspection(
@@ -331,15 +325,7 @@ class DeepDETAILS(pl.LightningModule):
             for i, real_profiles in enumerate(per_cluster_y):
                 y_hats = per_cluster_y_hat[i]
                 y_hats_list.append(y_hats)
-                x = torch.stack(
-                    [
-                        transform_counts(y_hats.flatten()),
-                        transform_counts(real_profiles.flatten()),
-                    ]
-                )
-                test_cor = torch.corrcoef(x)[0, 1]
-                if torch.isnan(test_cor):
-                    test_cor = 0.0
+                test_cor = self._batch_pearson(y_hats, real_profiles)
                 self.log(
                     f"test_corr_{i}", test_cor, batch_size=batch_size, on_epoch=True
                 )
@@ -367,10 +353,7 @@ class DeepDETAILS(pl.LightningModule):
         # routine evaluation
         msle_loss = self.profile_loss_func(preds, expected_profiles)
 
-        test_cor = self.test_pearsonr(
-            transform_counts(preds.flatten()),
-            transform_counts(expected_profiles.flatten()),
-        )
+        test_cor = self._batch_pearson(preds, expected_profiles)
 
         # groundtruth-based evaluation
         if len(expected_per_cluster_profiles) > 0:
