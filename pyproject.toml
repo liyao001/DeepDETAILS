@@ -25,7 +25,7 @@ classifiers = [
 dependencies = [
   "torch", "numpy", "pandas", "h5py", "pyfaidx",
   "pytorch-lightning", "torchmetrics", "einops",
-  "matplotlib", "tqdm", "biopython", "scikit-learn",
+  "matplotlib", "seaborn", "tqdm", "biopython", "scikit-learn",
   "pyBigWig", "pybedtools", "tensorboard",
   "scipy>=1.11.1", "wandb"
 ]
