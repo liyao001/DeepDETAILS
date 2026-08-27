@@ -207,7 +207,7 @@ def _training_parser(parent_parser: argparse.ArgumentParser):
         "--betas", help=PARAM_DESC["betas"], type=float, default=(0.9, 0.999), nargs=2
     )
     group.add_argument(
-        "--model-summary-depth", help=PARAM_DESC["max_depth"], type=int, default=6
+        "--model-summary-depth", help=PARAM_DESC["max_depth"], type=int, default=1
     )
     group.add_argument("--max-retry", help=PARAM_DESC["max_retry"], type=int, default=3)
     group.add_argument(
