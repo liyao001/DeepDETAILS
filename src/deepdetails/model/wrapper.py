@@ -241,14 +241,20 @@ class DeepDETAILS(pl.LightningModule):
             branch_corrs = msle_loss.new_tensor(0.0)
         self.log("train_br_cor", branch_corrs, batch_size=batch_size, on_step=True)
 
-        if misc[-1].dim() == 2:
-            prior = misc[-1][:, :]
+        batched_prior = misc[-1]
+        if batched_prior.dim() in (2, 3):
+            prior = batched_prior[0] if batched_prior.dim() == 3 else batched_prior
             cluster_preds = rearrange(
                 cs_preds
                 + torch.arange(cs_preds.shape[-1], device=self.device) * self.gamma,
                 "c b s l -> c (b s l)",
             )
             observed_corrs = corrcoef_stable(cluster_preds)
+            if prior.shape != observed_corrs.shape:
+                raise ValueError(
+                    f"Prior shape {tuple(prior.shape)} does not match cluster "
+                    f"correlation shape {tuple(observed_corrs.shape)}"
+                )
             prior_loss = (prior - observed_corrs).pow(2).mean()
             self.log(
                 "train_prior_loss", prior_loss, batch_size=batch_size, on_step=True
