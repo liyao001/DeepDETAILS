@@ -152,6 +152,25 @@ def deconv(
         non_background_only=test_pos_only,
         loads_trunc=loads_trunc,
     )
+    val_ds = (
+        SequenceSignalDataset(
+            root=dataset,
+            y_length=_Y_LENGTH,
+            is_training=0,
+            chromosomal_val=cv,
+            chromosomal_test=ct,
+            non_background_only=not all_regions,
+            loads_trunc=loads_trunc,
+        )
+        if chrom_cv
+        else None
+    )
+    if len(ds) == 0:
+        raise ValueError("Training split is empty; check chromosome split settings")
+    if len(test_ds) == 0:
+        raise ValueError("Testing split is empty; check --chromosomal-testing")
+    if val_ds is not None and len(val_ds) == 0:
+        raise ValueError("Validation split is empty; check --chromosomal-validation")
     logger.info(f"Sample {dataset} has {ds.n_clusters} clusters/cell types")
     _aux_info = {
         "ground truth": ds.load_groundtruth,
@@ -177,6 +196,17 @@ def deconv(
         shuffle=False,
         num_workers=num_workers,
         pin_memory=False,
+    )
+    val_iter = (
+        DataLoader(
+            val_ds,
+            batch_size=batch_size,
+            shuffle=False,
+            num_workers=num_workers,
+            pin_memory=False,
+        )
+        if val_ds is not None
+        else None
     )
     # generate roughly 10 screenshots
     test_screenshots_ratio = 10 / len(test_iter)
@@ -205,6 +235,7 @@ def deconv(
             wandb_entity=wandb_entity,
             wandb_upload_model=wandb_upload_model,
             pass_mark="",
+            training_readout="val_loss" if val_iter is not None else "train_loss",
         )
 
         model = DeepDETAILS(
@@ -237,7 +268,7 @@ def deconv(
             model,
             ckpt_path=resume_from_ckpt,
             train_dataloaders=train_iter,
-            val_dataloaders=None,
+            val_dataloaders=val_iter,
         )
 
         logger.info("Evaluating model's performances...")
