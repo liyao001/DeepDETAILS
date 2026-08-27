@@ -140,7 +140,7 @@ def get_trainer(
     max_epochs: int = 200,
     save_top_k_model: Union[str, int] = 1,
     hide_progress_bar: bool = False,
-    model_summary_depth: int = 6,
+    model_summary_depth: int = 1,
     version: Optional[str] = None,
     accelerator: str = "auto",
     devices: Union[Sequence[int], str, int] = "auto",
