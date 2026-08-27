@@ -148,6 +148,7 @@ def get_trainer(
     wandb_entity: Optional[str] = None,
     wandb_upload_model: Union[str, bool] = False,
     pass_mark: str = "1st",
+    training_readout: str = "train_loss",
 ) -> tuple[pl.Trainer, str]:
     """
     Get pl.Trainer for training / inference, etc.
@@ -183,6 +184,8 @@ def get_trainer(
     wandb_upload_model : Union[str, int]
         {wandb_upload_model}
     pass_mark
+    training_readout : str
+        Metric monitored for checkpointing and early stopping.
 
     Returns
     -------
@@ -191,7 +194,6 @@ def get_trainer(
     wbl.version : str
         Final effective WandB version string
     """.format(**PARAM_DESC)
-    training_readout = "train_loss"
     # avoid reuse run records
     wandb.finish()
 
