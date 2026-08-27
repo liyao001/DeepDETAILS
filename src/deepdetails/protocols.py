@@ -379,8 +379,7 @@ def _export_results(
         pin_memory=False,
     )
 
-    # disable grads + batchnorm + dropout
-    torch.set_grad_enabled(False)
+    # disable batchnorm + dropout
     trained_model.eval()
 
     n_regions = len(dataset)
@@ -428,7 +427,8 @@ def _export_results(
             )
             bs = x[0].shape[0]
 
-            model_outs = trained_model(x, loads)
+            with torch.no_grad():
+                model_outs = trained_model(x, loads)
             pc_profiles, pc_counts = model_outs[:2]
 
             cluster_preds = rescaling_prediction(
