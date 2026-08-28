@@ -372,21 +372,27 @@ def ixg(
                     gradient_mask = apply_gradient_requirements(
                         sequence_inputs, warn=False
                     )
-                    outputs = model(*inputs)
+                    try:
+                        outputs = model(*inputs)
+                        selected_outputs = outputs[target, :]
+                        if selected_outputs.requires_grad:
+                            (sequence_gradient,) = torch.autograd.grad(
+                                torch.unbind(selected_outputs),
+                                sequence_inputs,
+                                allow_unused=True,
+                                materialize_grads=True,
+                            )
+                        else:
+                            sequence_gradient = torch.zeros_like(x_ohe)
+                    finally:
+                        undo_gradient_requirements(sequence_inputs, gradient_mask)
 
-                    selected_outputs = outputs[target, :]
-                    (sequence_gradient,) = torch.autograd.grad(
-                        torch.unbind(selected_outputs),
-                        sequence_inputs,
-                    )
                     contrib = x_ohe * sequence_gradient
                     if abs_transform:
                         contrib = contrib.abs()
                     dset_contrib[
                         absolute_start_coord:absolute_end_coord, target, :, :
                     ] = contrib.detach().cpu().numpy()
-
-                    undo_gradient_requirements(sequence_inputs, gradient_mask)
     return result_file
 
 
@@ -514,6 +520,7 @@ def write_scores_to_bigwigs(
             )
         peaks = (
             peaks.assign(_ord=peaks[0].map(chrom_order))
+            # pyrefly: ignore[no-matching-overload]
             .sort_values(["_ord", 1], kind="mergesort")
             .drop(columns="_ord")
         )
