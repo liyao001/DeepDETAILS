@@ -63,6 +63,12 @@ git_describe_command = "git describe --dirty --tags --long --match [0-9]* --matc
 [tool.hatch.build.hooks.vcs]
 version-file = "src/deepdetails/_version.py"
 
+[tool.hatch.build.targets.wheel]
+core-metadata-version = "2.4"
+
+[tool.hatch.build.targets.sdist]
+core-metadata-version = "2.4"
+
 [tool.hatch.envs.default]
 features = ["dev"]
 [tool.hatch.envs.default.scripts]
@@ -168,14 +174,14 @@ check = "hatch check"
 check-code = "hatch check code"
 check-fmt = "hatch check fmt"
 check-types = "hatch check types"
-lint = "hatch run lint"
-ruff = "hatch run lint"
-typos = "hatch run check-typos"
-test = "hatch run test"
-test-data = "hatch run test-data"
-test-fast = "hatch run test-fast"
-test-train = "hatch run test-train"
-test-unit = "hatch run test-unit"
+lint = "ruff check ."
+ruff = "ruff check ."
+typos = "typos --config .typos.toml ."
+test = "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest tests"
+test-data = "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest -m data tests"
+test-fast = "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest -m 'not train and not gpu' tests"
+test-train = "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest -m train tests"
+test-unit = "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest -m unit tests"
 build = "hatch build"
-check-dist = "hatch run check-dist"
+check-dist = "twine check dist/*"
 ci = { depends-on = ["check", "typos", "test-fast", "build", "check-dist"] }
