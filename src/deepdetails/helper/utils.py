@@ -232,7 +232,6 @@ def get_trainer(
             log_model=wandb_upload_model,  # pyrefly: ignore[bad-argument-type]
             save_dir=save_to,
             offline=True,
-            settings=wandb.Settings(start_method="fork"),
         )
         ver = str(wbl.version)
     else:
