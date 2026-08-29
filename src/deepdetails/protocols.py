@@ -1,5 +1,6 @@
 import logging
 import os
+from contextlib import ExitStack
 from glob import glob
 from multiprocessing import Pool
 from typing import Optional, Sequence, Union
@@ -1120,69 +1121,79 @@ def merge_rep_preds(
     Returns
     -------
 
+    Raises
+    ------
+    ValueError
+        If fewer than two input files are provided, or if the input files
+        disagree on regions, prediction shapes, or attributes.
+
     """.format(**PARAM_DESC)
+    if len(in_pred_files) < 2:
+        raise ValueError(
+            "Need at least two prediction files to merge replicates, "
+            f"got {len(in_pred_files)}: {list(in_pred_files)}"
+        )
+
     logger.info(f"Merging (averaging) {in_pred_files} into {save_to}")
-    out = h5py.File(save_to, "w")
-    ins = [h5py.File(f, "r") for f in in_pred_files]
 
-    # check regions
-    regions = [i["regions"][:] for i in ins]
-    region_checks = [np.array_equal(r, regions[0]) for r in regions[1:]]
-    if not all(region_checks):
-        logger.error("Expecting regions to be consistent across all input files")
-        logger.error(region_checks)
-        exit(1)
+    with ExitStack() as stack:
+        ins = [stack.enter_context(h5py.File(f, "r")) for f in in_pred_files]
 
-    region_attrs = [dict(i["regions"].attrs.items()) for i in ins]
-    if not all([attr == region_attrs[0] for attr in region_attrs[1:]]):
-        logger.error("Expecting regions to be consistent across all input files")
-        logger.error(region_attrs)
-        exit(1)
+        # check regions
+        regions = [i["regions"][:] for i in ins]
+        if not all(np.array_equal(r, regions[0]) for r in regions[1:]):
+            raise ValueError(
+                "Expecting regions to be consistent across all input files, "
+                f"but they differ among {list(in_pred_files)}"
+            )
 
-    # copy region definitions
-    dset_rg = out.create_dataset("regions", data=regions[0])
-    for attr_name, attr_value in ins[0]["regions"].attrs.items():
-        dset_rg.attrs[attr_name] = attr_value
+        region_attrs = [dict(i["regions"].attrs.items()) for i in ins]
+        if not compare_dicts(region_attrs):
+            raise ValueError(
+                "Expecting region attributes to be consistent across all input "
+                f"files, got {region_attrs}"
+            )
 
-    # check pred shapes
-    pred_shapes = [i["preds"].shape for i in ins]
-    if not all([s == pred_shapes[0] for s in pred_shapes[1:]]):
-        logger.error(
-            "Expecting predictions to be the same shape across all input files"
+        # check pred shapes
+        pred_shapes = [i["preds"].shape for i in ins]
+        if not all(s == pred_shapes[0] for s in pred_shapes[1:]):
+            raise ValueError(
+                "Expecting predictions to be the same shape across all input "
+                f"files, got {pred_shapes}"
+            )
+
+        # check pred attrs
+        pred_attrs = [dict(i["preds"].attrs.items()) for i in ins]
+        if not compare_dicts(pred_attrs):
+            raise ValueError(
+                "Expecting predictions to have the same set of attributions "
+                f"across all input files, got {pred_attrs}"
+            )
+
+        out = stack.enter_context(h5py.File(save_to, "w"))
+
+        # copy region definitions
+        dset_rg = out.create_dataset("regions", data=regions[0])
+        for attr_name, attr_value in ins[0]["regions"].attrs.items():
+            dset_rg.attrs[attr_name] = attr_value
+
+        # create dataset for the predictions
+        ds = out.create_dataset(
+            "preds",
+            pred_shapes[0],
+            dtype="f",
+            chunks=(1, 1, pred_shapes[0][2], pred_shapes[0][3]),
+            compression="gzip",
         )
-        logger.error(pred_shapes)
-        exit(1)
+        ds.attrs["n_clusters"] = ins[0]["preds"].attrs["n_clusters"]
+        ds.attrs["n_targets"] = ins[0]["preds"].attrs["n_targets"]
+        ds.attrs["cluster_names"] = ins[0]["preds"].attrs["cluster_names"]
 
-    # check pred attrs
-    pred_attrs = [dict(i["preds"].attrs.items()) for i in ins]
-    if not compare_dicts(pred_attrs):
-        logger.error(
-            "Expecting predictions to have the same set of attributions across all input files"
-        )
-        logger.error(pred_attrs)
-        exit(1)
+        # calculate the average
+        for idx in tqdm(range(pred_shapes[0][1]), disable=quiet):
+            per_rep_values = np.stack([i["preds"][:, idx, :, :] for i in ins])
+            ds[:, idx, :, :] = per_rep_values.mean(axis=0)
 
-    # create dataset for the predictions
-    ds = out.create_dataset(
-        "preds",
-        (pred_shapes[0][0], pred_shapes[0][1], pred_shapes[0][2], pred_shapes[0][3]),
-        dtype="f",
-        chunks=(1, 1, pred_shapes[0][2], pred_shapes[0][3]),
-        compression="gzip",
-    )
-    ds.attrs["n_clusters"] = ins[0]["preds"].attrs["n_clusters"]
-    ds.attrs["n_targets"] = ins[0]["preds"].attrs["n_targets"]
-    ds.attrs["cluster_names"] = ins[0]["preds"].attrs["cluster_names"]
-
-    # calculate the average
-    for idx in tqdm(range(pred_shapes[0][1]), disable=quiet):
-        per_rep_values = np.stack([i["preds"][:, idx, :, :] for i in ins])
-        ds[:, idx, :, :] = per_rep_values.mean(axis=0)
-
-    # close files
-    for f in ins:
-        f.close()
-    out.close()
     logger.info("Merging completed")
 
     if not keep_old:

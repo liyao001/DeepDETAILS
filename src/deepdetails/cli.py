@@ -649,7 +649,7 @@ def _merge_preds(parent_parser: argparse.ArgumentParser):
     )
     g = group.add_mutually_exclusive_group(required=True)
     g.add_argument("--pred-dir", type=existing_dir, help=PARAM_DESC["pred_dir"])
-    g.add_argument("--preds", type=existing_file, nargs="+", help=PARAM_DESC["preds"])
+    g.add_argument("--preds", type=existing_file, nargs="2+", help=PARAM_DESC["preds"])
     group.add_argument("--save-to", type=str, required=True, help=PARAM_DESC["save_to"])
     group.add_argument(
         "--keep-old-preds", action="store_true", help=PARAM_DESC["keep_old_preds"]
