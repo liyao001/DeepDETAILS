@@ -4,7 +4,9 @@ import os
 import re
 import shlex
 import shutil
+import signal
 import subprocess
+import tempfile
 import unicodedata
 from datetime import datetime
 from typing import List, Optional, Sequence, Union
@@ -26,7 +28,7 @@ from deepdetails.par_description import PARAM_DESC
 
 LightningLogger = PLLogger | FabricLogger
 
-REQUIRED_BINARIES = ("bedtools", "bedGraphToBigWig", "sort")
+REQUIRED_BINARIES = ("awk", "bedtools", "bedGraphToBigWig", "sort")
 _PYPI_JSON_URL = "https://pypi.org/pypi/DeepDETAILS/json"
 _CONDA_UPDATE_CMD = "conda update -c bioconda -c conda-forge deepdetails"
 _PIP_UPDATE_CMD = "pip install -U DeepDETAILS"
@@ -130,6 +132,78 @@ def run_command(cmd: Union[str, Sequence[str]], raise_exception: bool = False):
     if raise_exception and proc.returncode != 0:
         raise RuntimeError(proc.stderr)
     return proc.stdout, proc.stderr, proc.returncode
+
+
+def _pipeline_stage_failed(returncode: int | None, last: bool) -> bool:
+    if returncode == 0:
+        return False
+    if returncode is None:
+        return True
+    # Upstream SIGPIPE is expected when a later stage exits first.
+    if not last and returncode == -signal.SIGPIPE:
+        return False
+    return True
+
+
+def run_pipeline(commands: Sequence[Sequence[str]], stdout) -> None:
+    """Run ``commands[0] | commands[1] | ...`` into ``stdout`` without a shell.
+
+    Each stage's exit code is checked. Stderr is captured to temp files so a
+    noisy tool cannot fill a PIPE and deadlock the pipeline.
+
+    Parameters
+    ----------
+    commands : Sequence[Sequence[str]]
+        List of commands to run
+    stdout : file-like object
+        Output file
+
+    Returns
+    -------
+    None
+
+    Raises
+    ------
+    RuntimeError
+        If any command fails.
+    """
+    err_files = []
+    procs: list[subprocess.Popen] = []
+    try:
+        prev_out = None
+        for i, cmd in enumerate(commands):
+            err = tempfile.TemporaryFile()
+            err_files.append(err)
+            last = i == len(commands) - 1
+            proc = subprocess.Popen(
+                cmd,
+                stdin=subprocess.DEVNULL if prev_out is None else prev_out,
+                stdout=stdout if last else subprocess.PIPE,
+                stderr=err,
+            )
+            if prev_out is not None:
+                prev_out.close()
+            procs.append(proc)
+            prev_out = None if last else proc.stdout
+
+        for proc in reversed(procs):
+            proc.wait()
+
+        for i, (cmd, proc, err) in enumerate(zip(commands, procs, err_files)):
+            last = i == len(commands) - 1
+            if not _pipeline_stage_failed(proc.returncode, last):
+                continue
+            err.seek(0)
+            msg = err.read().decode("utf-8", errors="replace").strip()
+            detail = f": {msg}" if msg else ""
+            raise RuntimeError(f"{cmd[0]} failed (exit {proc.returncode}){detail}")
+    finally:
+        for proc in procs:
+            if proc.poll() is None:
+                proc.kill()
+                proc.wait()
+        for err in err_files:
+            err.close()
 
 
 def get_trainer(
