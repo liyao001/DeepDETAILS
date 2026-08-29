@@ -49,23 +49,22 @@ def preds_to_bg_star(
         )
 
         output_name = f"C{cluster_idx}.{STRAND_LABELS[strand_idx]}.bg"
-        fh = open(os.path.join(save_to, output_name), "w")
-        for r_i in range(regions.shape[0]):
-            sample_pred = cluster_preds[cluster_idx, r_i, strand_idx, :]
-            coords = np.arange(starts[r_i], ends[r_i])
-            coords1 = coords + 1
-            if bins > 0:
-                coords = coords.reshape(-1, bins).min(axis=1)
-                coords1 = coords1.reshape(-1, bins).max(axis=1)
-                sample_pred = sample_pred.reshape(-1, bins).mean(axis=1)
+        with open(os.path.join(save_to, output_name), "w") as fh:
+            for r_i in range(regions.shape[0]):
+                sample_pred = cluster_preds[cluster_idx, r_i, strand_idx, :]
+                coords = np.arange(starts[r_i], ends[r_i])
+                coords1 = coords + 1
+                if bins > 0:
+                    coords = coords.reshape(-1, bins).min(axis=1)
+                    coords1 = coords1.reshape(-1, bins).max(axis=1)
+                    sample_pred = sample_pred.reshape(-1, bins).mean(axis=1)
 
-            fh.writelines(
-                [
-                    f"{chroms[r_i]}\t{coords[i]}\t{coords1[i]}\t{sample_pred[i]}\n"
-                    for i in np.where(np.abs(sample_pred) > min_abs_val)[0]
-                ]
-            )
-        fh.close()
+                fh.writelines(
+                    [
+                        f"{chroms[r_i]}\t{coords[i]}\t{coords1[i]}\t{sample_pred[i]}\n"
+                        for i in np.where(np.abs(sample_pred) > min_abs_val)[0]
+                    ]
+                )
     return output_name
 
 
