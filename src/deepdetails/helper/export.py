@@ -1,12 +1,18 @@
+import logging
 import os
 
 import h5py
 import numpy as np
 
 from deepdetails.data import parse_regions
+from deepdetails.helper.utils import run_command, run_pipeline
 
 STRAND_LABELS = ("pl", "mn")
 STRAND_COEFF = (1, -1)
+
+_AWK_SCALE_PROG = 'BEGIN{OFS="\\t";FS="\\t"}{print $1,$2,$3,$4*c}'
+
+logger = logging.getLogger(__name__)
 
 
 def preds_to_bg_star(
@@ -68,6 +74,10 @@ def preds_to_bg_star(
     return output_name
 
 
+def _awk_scale_argv(coef: int) -> list[str]:
+    return ["awk", "-v", f"c={coef}", _AWK_SCALE_PROG]
+
+
 def bg_to_bw_core(
     bg_file: str,
     prefix: str,
@@ -96,31 +106,37 @@ def bg_to_bw_core(
     -------
     dest_bw : str
         Destination bigWig file
+
+    Raises
+    ------
+    RuntimeError
+        If `sort`, `bedtools merge`, `awk`, or `bedGraphToBigWig` fails.
     """
-    _house_keeping = []
-    _house_keeping.append(bg_file)
-
     dest_bg = f"{prefix}.bedGraph"
-    _house_keeping.append(dest_bg)
-    if not skip_sort_merge:
-        cmd = f"sort -T . -k1,1 -k2,2n {bg_file} | "
-        cmd += 'bedtools merge -i stdin -d -1 -c 4 -o mean | awk \'BEGIN{OFS="\\t";FS="\\t"}'
-        cmd += f"{{print $1,$2,$3,$4*{coef}}}' > {dest_bg}"
-        print(cmd)
-        os.system(cmd)
-    else:
-        cmd = 'awk \'BEGIN{OFS="\\t";FS="\\t"} '
-        cmd += f"{{print $1,$2,$3,$4*{coef}}}' "
-        cmd += f"{bg_file} > {dest_bg}"
-        print(cmd)
-        os.system(cmd)
-
     dest_bw = f"{prefix}.bw"
-    cmd = f"bedGraphToBigWig {dest_bg} {chrom_size} {dest_bw}"
-    print(cmd)
-    os.system(cmd)
+    _house_keeping = [bg_file, dest_bg]
 
-    # clean up
-    for f in _house_keeping:
-        os.system(f"rm {f}")
+    try:
+        with open(dest_bg, "wb") as out_fh:
+            if skip_sort_merge:
+                logger.debug("Scaling %s", bg_file)
+                run_pipeline([_awk_scale_argv(coef) + [bg_file]], out_fh)
+            else:
+                logger.debug("Sorting, merging, and scaling %s", bg_file)
+                run_pipeline(
+                    [
+                        ["sort", "-T", ".", "-k1,1", "-k2,2n", bg_file],
+                        "bedtools merge -i stdin -d -1 -c 4 -o mean".split(),
+                        _awk_scale_argv(coef),
+                    ],
+                    out_fh,
+                )
+
+        run_command(
+            ["bedGraphToBigWig", dest_bg, chrom_size, dest_bw], raise_exception=True
+        )
+    finally:
+        for f in _house_keeping:
+            if os.path.exists(f):
+                os.remove(f)
     return dest_bw
