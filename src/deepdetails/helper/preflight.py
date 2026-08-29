@@ -103,9 +103,12 @@ def build_aggregated_counts_table(
     for i in range(n_aggs):
         logger.info(f"Generating aggregated profiles: {i + 1} / {n_aggs}")
         for ct, size in group_sizes.items():
+            if ct not in fragment_files_dict:
+                continue
             idx = ordered_groups.index(ct)
-            if size < min_cells_required:
+            if size < min_cells_required or size // 2 < 1:
                 to_be_removed.add((idx, ct))
+                continue
             fragments = pd.read_csv(fragment_files_dict[ct], sep="\t", header=None)
             # sample cells
             sample_size = size // 2
@@ -115,24 +118,38 @@ def build_aggregated_counts_table(
                 )
             )
             sampled_frags = fragments.loc[fragments[3].isin(sampled_cells)]
+            n_sampled_frags = sampled_frags.shape[0]
+            logger.info(
+                f"Sampled {sample_size} cells and {n_sampled_frags} fragments for {ct}"
+            )
+            if n_sampled_frags == 0:
+                logger.warning(
+                    f"The cells sampled for {ct} carry no fragments; "
+                    "excluding this cluster from the preflight check"
+                )
+                to_be_removed.add((idx, ct))
+                continue
+
             tmp_frags = fragment_files_dict[ct] + ".tmp"
             sampled_frags.to_csv(tmp_frags, sep="\t", header=False, index=False)
-            logger.info(
-                f"Sampled {sample_size} cells and {sampled_frags.shape[0]} fragments for {ct}"
-            )
             # get aggregated counts
             logger.info(f"Building counts table for {ct}")
-            cov = regions.coverage(pybedtools.BedTool(tmp_frags)).to_dataframe(
-                disable_auto_names=True, header=None
-            )[3]
-            # normalize by depth
-            counts_mat[idx, i, :] = cov * (1_000000.0 / sampled_frags.shape[0])
-            os.remove(tmp_frags)
+            try:
+                cov = regions.coverage(pybedtools.BedTool(tmp_frags)).to_dataframe(
+                    disable_auto_names=True, header=None
+                )[3]
+                # normalize by depth
+                counts_mat[idx, i, :] = cov * (1_000000.0 / n_sampled_frags)
+            finally:
+                if os.path.exists(tmp_frags):
+                    os.remove(tmp_frags)
     if len(to_be_removed) > 0:
         all_cts = list(range(n_cell_types))
         for ci, ct in to_be_removed:
-            all_cts.remove(ci)
-            ordered_groups.remove(ct)
+            if ci in all_cts:
+                all_cts.remove(ci)
+            if ct in ordered_groups:
+                ordered_groups.remove(ct)
 
         counts_mat = counts_mat[all_cts, :, :]
     return counts_mat, tuple(ordered_groups)
@@ -229,7 +246,15 @@ def get_signature_distribution(
             logger.warning(f"Cannot identify any signatures for cluster {c}")
         all_candidates[c] = c_candidates
 
-    top_n = min(max_top_n, min([len(c) for c in all_candidates.values() if len(c) > 0]))
+    non_empty = [len(c) for c in all_candidates.values() if len(c) > 0]
+    if not non_empty:
+        raise ValueError(
+            "Preflight check could not identify signature regions for any cell "
+            f"type/cluster at qval < {qval_cutoff} and fold change > {fc_cutoff}. "
+            "Relax --candidate-qval / --candidate-fc, increase --n-aggs, or skip "
+            "the check with --skip-preflight."
+        )
+    top_n = min(max_top_n, min(non_empty))
     logger.info(
         f"For each cell type/cluster, the top {top_n} differentially accessible regions will serve as signatures"
     )
@@ -405,6 +430,13 @@ def preflight_check(
     if len(to_be_excluded) > 0:
         logger.info(
             f"Clusters {to_be_excluded} will be excluded because of low fragment counts in the reference"
+        )
+    if len(cluster_labels) < 2:
+        raise ValueError(
+            f"Only {len(cluster_labels)} cluster(s) survived the reference quality "
+            f"filters (excluded: {sorted(to_be_excluded)}); at least 2 are needed to "
+            "identify signatures. Lower --min-cells-required or skip the check with "
+            "--skip-preflight."
         )
 
     # find signatures
