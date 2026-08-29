@@ -92,7 +92,8 @@ def bulk_visual_inspection(
     for i, (data, label) in enumerate(zip(plot_data, plot_label)):
         ax = axs[i]
         ax.plot(data[0, :], color="#FF0D57")
-        ax.plot(data[1, :] * -1, color="#1E88E5")
+        if data.shape[0] == 2:
+            ax.plot(data[1, :] * -1, color="#1E88E5")
         if i < 2:
             _adjust_y_ranges(ax)
         ax.set_ylabel(label)
@@ -100,7 +101,8 @@ def bulk_visual_inspection(
         ax.spines["right"].set_visible(False)
 
     rows_sharing_y = tuple(range(2, len(axs)))
-    _share_ylim(axs, rows_sharing_y)
+    if rows_sharing_y:
+        _share_ylim(axs, rows_sharing_y)
 
     fig.align_ylabels()
     plt.tight_layout()
