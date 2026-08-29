@@ -39,6 +39,71 @@ def parse_regions(hdf5_handle: h5py.File) -> pd.DataFrame:
     return df
 
 
+def _apply_region_filters(
+    df: pd.DataFrame,
+    is_training: int,
+    chromosomal_val: Optional[Sequence[str]],
+    chromosomal_test: Optional[Sequence[str]],
+    non_background_only: bool,
+    enable_additional_filter: Optional[bool],
+    pos_only_subset: Optional[int],
+    subset_seed: Optional[int],
+) -> pd.DataFrame:
+    """Select the regions belonging to one train/validation/test split.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Region table. Column 3 holds the region type (1 = peak, 0 = background)
+        and the optional column 4 holds the additional filter label.
+    is_training : int
+        0 : validation, 1 : training, 2 : testing. Any other value (e.g. -1)
+        skips chromosome-based splitting and keeps every region.
+    chromosomal_val : Optional[Sequence[str]]
+        {chromosomal_validation}
+    chromosomal_test : Optional[Sequence[str]]
+        {chromosomal_testing}
+    non_background_only : bool
+        Keep only regions labelled 1 in column 3.
+    enable_additional_filter : Optional[bool]
+        True keeps regions labelled 1 in column 4, False keeps those labelled 0.
+        None disables the filter.
+    pos_only_subset : Optional[int]
+        Sample this many positive regions from the training split.
+    subset_seed : Optional[int]
+        Seed for `pos_only_subset` sampling.
+
+    Returns
+    -------
+    df : pd.DataFrame
+        Filtered regions, still carrying the original index.
+    """.format(**PARAM_DESC)
+    if non_background_only:
+        df = df.loc[df[3] == 1].copy()
+    if enable_additional_filter is not None and df.shape[1] > 4:
+        wanted = 1 if enable_additional_filter else 0
+        df = df.loc[df[4] == wanted, :].copy()
+
+    if is_training == 1:
+        v_set = set(chromosomal_val) if chromosomal_val is not None else set()
+        t_set = set(chromosomal_test) if chromosomal_test is not None else set()
+        df = df.loc[~df[0].isin(v_set.union(t_set)), :]
+        if isinstance(pos_only_subset, int) and pos_only_subset > 0:
+            pos_df = df[df[3] == 1]
+            if pos_only_subset > pos_df.shape[0]:
+                raise ValueError(
+                    "Number of subset cannot be larger than the positive training set"
+                )
+            df = pos_df.sample(
+                n=pos_only_subset, replace=False, random_state=subset_seed
+            )
+    elif is_training == 0 and chromosomal_val is not None:
+        df = df.loc[df[0].isin(chromosomal_val), :]
+    elif is_training == 2 and chromosomal_test is not None:
+        df = df.loc[df[0].isin(chromosomal_test), :]
+    return df
+
+
 class SequenceSignalDataset(Dataset):
     """
     Dataset class for both one-hot encoded sequences and signal tracks
@@ -160,31 +225,16 @@ class SequenceSignalDataset(Dataset):
             msg = "region_file should have at least 4 cols: chr, start, end, and region_type. {self.df.head()}"
             raise ValueError(msg)
 
-        if non_background_only:
-            self.df = self.df.loc[self.df[3] == 1].copy()
-        if enable_additional_filter is not None and self.df.shape[1] > 4:
-            # pyrefly: ignore[bad-assignment]
-            self.df = self.df.loc[
-                self.df[4] == 1 if enable_additional_filter else 0, :
-            ].copy()
-        if is_training == 1:
-            v_set = set(chromosomal_val) if chromosomal_val is not None else set()
-            t_set = set(chromosomal_test) if chromosomal_test is not None else set()
-            vt_chromosomes = v_set.union(t_set)
-            self.df = self.df.loc[~self.df[0].isin(vt_chromosomes), :]
-            if isinstance(pos_only_subset, int) and pos_only_subset > 0:
-                pos_df = self.df[self.df[3] == 1]
-                if pos_only_subset > pos_df.shape[0]:
-                    raise ValueError(
-                        "Number of subset cannot be larger than the positive training set"
-                    )
-                self.df = pos_df.sample(
-                    n=pos_only_subset, replace=False, random_state=subset_seed
-                )
-        elif is_training == 0 and chromosomal_val is not None:
-            self.df = self.df.loc[self.df[0].isin(chromosomal_val), :]
-        elif is_training == 2 and chromosomal_test is not None:
-            self.df = self.df.loc[self.df[0].isin(chromosomal_test), :]
+        self.df = _apply_region_filters(
+            self.df,
+            is_training=is_training,
+            chromosomal_val=chromosomal_val,
+            chromosomal_test=chromosomal_test,
+            non_background_only=non_background_only,
+            enable_additional_filter=enable_additional_filter,
+            pos_only_subset=pos_only_subset,
+            subset_seed=subset_seed,
+        )
         self.df.reset_index(drop=False, inplace=True)
 
     @property
@@ -487,31 +537,16 @@ class DynamicDataset(Dataset):
         if use_bulk_constraint:
             self.bulk_constraint()
 
-        if non_background_only:
-            self.df = self.df.loc[self.df[3] == 1].copy()
-        if enable_additional_filter is not None and self.df.shape[1] > 4:
-            # pyrefly: ignore[bad-assignment]
-            self.df = self.df.loc[
-                self.df[4] == 1 if enable_additional_filter else 0, :
-            ].copy()
-        if is_training == 1:
-            v_set = set(chromosomal_val) if chromosomal_val is not None else set()
-            t_set = set(chromosomal_test) if chromosomal_test is not None else set()
-            vt_chromosomes = v_set.union(t_set)
-            self.df = self.df.loc[~self.df[0].isin(vt_chromosomes), :]
-            if isinstance(pos_only_subset, int) and pos_only_subset > 0:
-                pos_df = self.df[self.df[3] == 1]
-                if pos_only_subset > pos_df.shape[0]:
-                    raise ValueError(
-                        "Number of subset cannot be larger than the positive training set"
-                    )
-                self.df = pos_df.sample(
-                    n=pos_only_subset, replace=False, random_state=subset_seed
-                )
-        elif is_training == 0 and chromosomal_val is not None:
-            self.df = self.df.loc[self.df[0].isin(chromosomal_val), :]
-        elif is_training == 2 and chromosomal_test is not None:
-            self.df = self.df.loc[self.df[0].isin(chromosomal_test), :]
+        self.df = _apply_region_filters(
+            self.df,
+            is_training=is_training,
+            chromosomal_val=chromosomal_val,
+            chromosomal_test=chromosomal_test,
+            non_background_only=non_background_only,
+            enable_additional_filter=enable_additional_filter,
+            pos_only_subset=pos_only_subset,
+            subset_seed=subset_seed,
+        )
         self.df.reset_index(drop=False, inplace=True)
 
     @property
