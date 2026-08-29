@@ -923,6 +923,13 @@ def convert_bulk_frags_to_ct_frags(
     transformed_barcodes : pd.DataFrame
         column 0: barcode
         column 1: transformed cell type label
+
+    Raises
+    ------
+    ValueError
+        If the barcode file does not have 2 columns.
+        If the reference labels do not match the cell types.
+        If no fragments are found for any cell type.
     """.format(**PARAM_DESC)
     barcodes = pd.read_csv(barcode_file, sep="\t", header=None)
     if barcodes.shape[1] != 2:
@@ -996,6 +1003,13 @@ def convert_bulk_frags_to_ct_frags(
     logger.info(
         f"{total_frags - missing_frags} / {total_frags} fragments can be associated to provided cell type annotations"
     )
+
+    empty_cell_types = sorted(ct for ct, n in frags_per_ct.items() if n == 0)
+    if empty_cell_types:
+        raise ValueError(
+            f"No fragments found for cell type(s): {', '.join(empty_cell_types)}."
+        )
+
     logger.info(
         "Finished generating pseudo-bulk fragment files based on their source cell type / cluster..."
     )
