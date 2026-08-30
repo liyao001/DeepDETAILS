@@ -1,6 +1,5 @@
 import os
 from collections import defaultdict
-from itertools import combinations
 from typing import Optional, Union
 
 import h5py
@@ -98,7 +97,6 @@ class ModelWithSummarization(pl.LightningModule):
         self,
         base_model: Union[nn.Module, pl.LightningModule],
         summarizer: str = "weighted_sum",
-        contrast: Optional[str] = None,
         sample_in_first_dim: bool = False,
         apply_loads_trick: bool = False,
     ):
@@ -110,9 +108,6 @@ class ModelWithSummarization(pl.LightningModule):
             Base model class
         summarizer : str
             Summarization method. Currently, supports "weighted_sum", "sum", and "loads"
-        contrast : Optional[str]
-            set values such as fc (fold change) or lfc (log fold change) to calculate the contrast between
-            the predicted clusters
         sample_in_first_dim : bool, optional
             If True, the first two dimensions of the output from the base model will be swapped.
         apply_loads_trick : bool, optional
@@ -124,20 +119,9 @@ class ModelWithSummarization(pl.LightningModule):
         super(ModelWithSummarization, self).__init__()
         self.summarizer = summarizer
         self.model = base_model
-        n_clusters = int(getattr(base_model, "expected_clusters"))
-        self.expected_clusters = n_clusters
-        self.fc = True if contrast is not None and contrast.upper() == "FC" else False
-        self.lfc = True if contrast is not None and contrast.upper() == "LFC" else False
-        self.ld = True if contrast is not None and contrast.upper() == "LOAD" else False
+        self.expected_clusters = int(getattr(base_model, "expected_clusters"))
         self.sample_in_first_dim = sample_in_first_dim
         self.apply_loads_trick = apply_loads_trick
-        self._comp_groups = tuple(combinations(np.arange(n_clusters), 2))
-
-        if self.fc or self.lfc:
-            print("Overriding summarizer clusters with the following contrast groups")
-            for i, g in enumerate(self._comp_groups):
-                print(i, g)
-            self.expected_clusters = len(self._comp_groups)
 
     def forward(
         self, seq: torch.Tensor, atac: torch.Tensor, loads: torch.Tensor
@@ -156,7 +140,10 @@ class ModelWithSummarization(pl.LightningModule):
         Returns
         -------
         out : torch.Tensor
-            shape: batch_size x expected_clusters
+            Shape: expected_clusters x batch_size for the profile-based
+            summarizers, which is what `ixg` indexes. The two axes are swapped
+            when `sample_in_first_dim` is set, and the "loads" summarizer always
+            returns batch_size x expected_clusters.
         """
         model_outs = self.model([seq, atac], loads)
         pc_profiles, pc_counts, pred_loads = model_outs[:3]
@@ -206,19 +193,6 @@ class ModelWithSummarization(pl.LightningModule):
                 out = torch.swapaxes(out, 0, 1)
         else:
             out = pred_loads
-        # shape of out: batch_size, n_clusters
-        if self.fc or self.lfc:
-            out = out + 10e-16
-            contrast_out = torch.zeros(seq.shape[0], len(self._comp_groups))
-            for i, (gx, gy) in enumerate(self._comp_groups):
-                contrast_out[:, i] = out[:, gx] / out[:, gy]
-
-            if self.lfc:
-                contrast_out = torch.log2(contrast_out)
-            out = contrast_out
-        elif self.ld:
-            out = out + 10e-16
-            out = out / out.sum(dim=-1)[:, None]
 
         return out
 
@@ -290,7 +264,8 @@ def ixg(
     Parameters
     ----------
     model : torch.nn.Module or pl.LightningModule
-        model whose forward returns a tensor of shape (batch_size, n_clusters).
+        model whose forward returns a tensor of shape (n_clusters, batch_size);
+        attributions are taken one cluster row at a time.
     dataset : ReducedDataset
 
     batch_size : int
