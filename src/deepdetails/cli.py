@@ -18,7 +18,7 @@ from deepdetails.helper.argtypes import (
     existing_file,
 )
 from deepdetails.helper.utils import check_update, require_external_binaries
-from deepdetails.par_description import PARAM_DESC, RescalingMode
+from deepdetails.par_description import PARAM_DESC, RescalingMode, SplitMode
 
 
 class _Formatter(
@@ -535,9 +535,9 @@ def _export_wg_pred_parser(parent_parser: argparse.ArgumentParser):
         "--dataset-mode",
         dest="is_training",
         help=PARAM_DESC["is_training"],
-        choices=(0, 1, 2, -1),
-        default=-1,
-        type=int,
+        choices=SplitMode.values(),
+        default=SplitMode.ALL,
+        type=SplitMode.parse,
     )
 
     group.add_argument(

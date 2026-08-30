@@ -1,6 +1,34 @@
 from enum import IntEnum
 
 
+class SplitMode(IntEnum):
+    ALL = -1
+    VAL = 0
+    TRAIN = 1
+    TEST = 2
+
+    @property
+    def description(self) -> str:
+        return {
+            SplitMode.ALL: "all regions (no chromosome split)",
+            SplitMode.VAL: "validation",
+            SplitMode.TRAIN: "training",
+            SplitMode.TEST: "testing",
+        }[self]
+
+    @classmethod
+    def parse(cls, value: str) -> "SplitMode":
+        return cls(int(value))
+
+    @classmethod
+    def values(cls) -> tuple:
+        return tuple(mode.value for mode in cls)
+
+    @classmethod
+    def help_text(cls) -> str:
+        return ", ".join(f"{mode.value}: {mode.description}" for mode in cls)
+
+
 class RescalingMode(IntEnum):
     NONE = 0
     COUNTS = 1
@@ -95,7 +123,7 @@ PARAM_DESC = {
     # parameters for a dynamic dataset
     "fa_file": "Genome fasta file, should have a companion index file (.fai)",
     "sc_norm_file": "Path to a CSV file with two columns: cluster name and normalization factor. No header, no index.",
-    "is_training": "0 : validation, 1 : training, 2 : testing, by default 1",
+    "is_training": SplitMode.help_text(),
     "use_bulk_constraint": "Mark all regions with no bulk signal as background regions",
     # parameters for the model
     "profile_shrinkage": "# GRU filters for the accessibility profiles will be # CNN filters / profile_shrinkage",

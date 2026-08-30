@@ -41,7 +41,7 @@ from deepdetails.helper.utils import (
     slugify,
 )
 from deepdetails.model.wrapper import DeepDETAILS
-from deepdetails.par_description import PARAM_DESC, RescalingMode
+from deepdetails.par_description import PARAM_DESC, RescalingMode, SplitMode
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(
@@ -138,7 +138,7 @@ def deconv(
     ds = SequenceSignalDataset(
         root=dataset,
         y_length=_Y_LENGTH,
-        is_training=True,
+        is_training=SplitMode.TRAIN,
         non_background_only=not all_regions,
         chromosomal_val=cv if chrom_cv else None,
         chromosomal_test=ct if chrom_cv else None,
@@ -147,7 +147,7 @@ def deconv(
     test_ds = SequenceSignalDataset(
         root=dataset,
         y_length=_Y_LENGTH,
-        is_training=2,
+        is_training=SplitMode.TEST,
         chromosomal_val=cv if chrom_cv else None,
         chromosomal_test=ct if chrom_cv else None,
         non_background_only=test_pos_only,
@@ -157,7 +157,7 @@ def deconv(
         SequenceSignalDataset(
             root=dataset,
             y_length=_Y_LENGTH,
-            is_training=0,
+            is_training=SplitMode.VAL,
             chromosomal_val=cv,
             chromosomal_test=ct,
             non_background_only=not all_regions,
@@ -522,7 +522,7 @@ def export_results(
     pred_ds = SequenceSignalDataset(
         root=dataset,
         y_length=_Y_LENGTH,
-        is_training=-1,
+        is_training=SplitMode.ALL,
         loads_trunc=loads_trunc,
         chromosomal_val=None,
         chromosomal_test=None,
@@ -558,7 +558,7 @@ def export_wg_results(
     sc_norm_file: Optional[str] = None,
     cluster_names: Optional[Sequence[str]] = None,
     target_sliding_sum: Optional[int] = 0,
-    is_training: int = 1,
+    is_training: Union[int, SplitMode] = SplitMode.TRAIN,
     chromosomal_val: Optional[Sequence[str]] = None,
     chromosomal_test: Optional[Sequence[str]] = None,
     loads_trunc: Optional[int] = None,
@@ -1244,7 +1244,7 @@ def export_attr(
     raw_ds = SequenceSignalDataset(
         root=dataset,
         y_length=_Y_LENGTH,
-        is_training=True,
+        is_training=SplitMode.TRAIN,
         non_background_only=True,
         chromosomal_val=None,
         chromosomal_test=None,
