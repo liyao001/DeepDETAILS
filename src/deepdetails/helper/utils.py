@@ -351,7 +351,9 @@ def get_trainer(
     return trainer_obj, ver
 
 
-def internal_qc(metrics: list[float], pred_counts: torch.Tensor):
+def internal_qc(
+    metrics: list[float], pred_counts: torch.Tensor
+) -> tuple[tuple[float, list[float]], bool, bool]:
     """
     Run internal QC to determine if the deconvolution is sound
 
@@ -364,12 +366,15 @@ def internal_qc(metrics: list[float], pred_counts: torch.Tensor):
 
     Returns
     -------
-    qc_val : float
-        QC value
-    qc_result_brc : bool
-        Branch correlation based QC result
-    qc_result_sum : bool
-        Total sum based QC result
+    qc_payload : tuple[float, list[float]]
+        ``(qc_val, predicted counts as floats)``. ``qc_val`` is 0.0 when fewer
+        than three metrics were collected.
+    branch_corr_qc_passed : bool
+        Branch-correlation verdict. True when the metric decreased, late
+        correlation is already low, or there were fewer than three
+        samples (a warning is logged in that last case).
+    sum_qc_passed : bool
+        True when every cluster/strand has non-zero predicted mass.
     """
     qc_val = 0.0
     later = 0.0
@@ -383,14 +388,20 @@ def internal_qc(metrics: list[float], pred_counts: torch.Tensor):
         n_steps = len(obs)
         early = np.mean(obs[: n_steps // 2]) + 10e-16
         later = np.mean(obs[n_steps // 2 :]) + 10e-16
-        qc_val = early / later
+        qc_val = float(early / later)
+        branch_corr_qc_passed = bool(qc_val > 1.0 or float(later) < 0.4)
+    else:
+        logger.warning(
+            "Correlation-based QC skipped: fewer than 3 metric values collected."
+        )
+        branch_corr_qc_passed = True
 
-    cr_sum_collapsed = (
+    sum_qc_passed = (
         torch.isclose(pred_counts, torch.zeros_like(pred_counts), atol=0.1).sum().item()
         == 0
     )
-    cr_br_cor = qc_val > 1.0 or later < 0.4
-    return (float(qc_val), pred_counts.tolist()), cr_br_cor, cr_sum_collapsed
+    pred_as_floats = [float(v) for v in pred_counts.flatten().tolist()]
+    return (qc_val, pred_as_floats), branch_corr_qc_passed, sum_qc_passed
 
 
 def calc_counts_per_locus(
