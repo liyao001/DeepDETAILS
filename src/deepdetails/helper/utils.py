@@ -602,6 +602,29 @@ def set_tmp_for_pbt(tmp_dir="."):
         pybedtools.set_tempdir(tmp_dir)
 
 
+def _is_unsorted_bedgraph_error(message: str) -> bool:
+    """
+    True if bedGraphToBigWig rejected the file for sort order.
+
+    Parameters
+    ----------
+    message : str
+        The error message from bedGraphToBigWig
+
+    Returns
+    -------
+    bool
+    """
+
+    _UNSORTED_BEDGRAPH_MARKERS = (
+        "not sorted",
+        "not case-sensitive sorted",
+        "not in single block",
+    )
+
+    return any(marker in message for marker in _UNSORTED_BEDGRAPH_MARKERS)
+
+
 def bedgraph_to_bigwig(
     in_bedgraph_path: str, out_bigwig_path: str, chrom_size_path: str
 ):
@@ -627,47 +650,42 @@ def bedgraph_to_bigwig(
         for line in csf:
             allowed_chromosomes.add(line.strip().split()[0])
 
-    # filter bedGraph and write to output file
     tmp_file = f"{in_bedgraph_path}.1"
-    with open(in_bedgraph_path, "r") as input_file, open(tmp_file, "w") as output_file:
-        for line in input_file:
-            parts = line.split("\t")
-            chromosome = parts[0]
-            if chromosome in allowed_chromosomes:
-                output_file.write(line)
-
-    # convert the filtered bedGraph file into bigWig format
+    sorted_file = f"{tmp_file}.sorted"
     try:
-        run_command(
-            ["bedGraphToBigWig", tmp_file, chrom_size_path, out_bigwig_path],
-            raise_exception=True,
-        )
-    except RuntimeError as e:
-        if str(e).find("not case-sensitive sorted") != -1:
-            sorted_file = f"{tmp_file}.sorted"
-            with open(sorted_file, "w") as sorted_output:
-                proc = subprocess.run(
-                    ["sort", "-k1,1", "-k2,2n", tmp_file],
-                    stdout=sorted_output,
-                    stderr=subprocess.PIPE,
-                    text=True,
-                    check=False,
-                )
-            if proc.returncode != 0:
-                raise RuntimeError(proc.stderr) from e
+        with (
+            open(in_bedgraph_path, "r") as input_file,
+            open(tmp_file, "w") as output_file,
+        ):
+            for line in input_file:
+                parts = line.split("\t")
+                chromosome = parts[0]
+                if chromosome in allowed_chromosomes:
+                    output_file.write(line)
+
+        try:
+            run_command(
+                ["bedGraphToBigWig", tmp_file, chrom_size_path, out_bigwig_path],
+                raise_exception=True,
+            )
+        except RuntimeError as e:
+            if not _is_unsorted_bedgraph_error(str(e)):
+                raise
             try:
                 run_command(
-                    ["bedGraphToBigWig", sorted_file, chrom_size_path, out_bigwig_path],
+                    ["env", "LC_ALL=C", "sort", "-o", sorted_file, "-k1,1", "-k2,2n", tmp_file],
                     raise_exception=True,
                 )
-            finally:
-                if os.path.exists(sorted_file):
-                    os.remove(sorted_file)
-        else:
-            raise e
-
-    # remove the temporary file
-    os.remove(tmp_file)
+                run_command(
+                    ["bedGraphToBigWig", sorted_file, chrom_size_path, out_bigwig_path,],
+                    raise_exception=True,
+                )
+            except RuntimeError as retry_err:
+                raise retry_err from e
+    finally:
+        for path in (tmp_file, sorted_file):
+            if os.path.exists(path):
+                os.remove(path)
 
 
 def compare_dicts(dicts: Sequence[dict]) -> bool:
