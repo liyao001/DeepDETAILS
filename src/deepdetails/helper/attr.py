@@ -67,7 +67,7 @@ class ReducedDataset(torch.utils.data.Dataset):
                 self.final_data_indexes, subset, replace=False
             ).tolist()
         self.region_file = "region_mapping.bed"
-        self.base_data.df.iloc[self.final_data_indexes][[0, 1, 2, 3, "index"]].to_csv(
+        self.base_data.df.loc[self.final_data_indexes][[0, 1, 2, 3, "index"]].to_csv(
             self.region_file, sep="\t", index=False, header=False
         )
 
@@ -84,7 +84,9 @@ class ReducedDataset(torch.utils.data.Dataset):
         return self.base_data.n_clusters
 
     def __getitem__(self, index):
-        return self.base_data[int(self.final_data_indexes[index])]
+        label = int(self.final_data_indexes[index])
+        position = self.base_data.df.index.get_loc(label)
+        return self.base_data[position]
 
     def __len__(self):
         return len(self.final_data_indexes)
