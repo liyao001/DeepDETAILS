@@ -8,10 +8,10 @@ class RMSLELoss(nn.Module):
 
     """
 
-    def __init__(self, squared=True):
+    def __init__(self, root: bool = True):
         super().__init__()
         self.mse = nn.MSELoss(reduction="none")
-        self.squared = squared
+        self.root = root
 
     def forward(self, pred: torch.Tensor, actual: torch.Tensor):
         # shape of self.mse(): batch, clusters, seq_len
@@ -23,7 +23,7 @@ class RMSLELoss(nn.Module):
             .sum(axis=-1)
             .mean()
         )
-        return torch.sqrt(mse) if self.squared else mse
+        return torch.sqrt(mse) if self.root else mse
 
 
 def off_diagonal(x: torch.Tensor):
