@@ -297,9 +297,28 @@ def _model_conf_parser(parent_parser: argparse.ArgumentParser):
 
 def _wandb_parser(parent_parser: argparse.ArgumentParser):
     group = parent_parser.add_argument_group("WandB")
-    group.add_argument("--wandb-project", default=os.environ.get("WANDB_PROJECT"))
-    group.add_argument("--wandb-entity", default=os.environ.get("WANDB_ENTITY"))
-    group.add_argument("--wandb-upload-model", action="store_true", required=False)
+    group.add_argument(
+        "--wandb-project",
+        default=os.environ.get("WANDB_PROJECT"),
+        help=PARAM_DESC["wandb_project"],
+    )
+    group.add_argument(
+        "--wandb-entity",
+        default=os.environ.get("WANDB_ENTITY"),
+        help=PARAM_DESC["wandb_entity"],
+    )
+    group.add_argument(
+        "--wandb-upload-model",
+        action="store_true",
+        required=False,
+        help=PARAM_DESC["wandb_upload_model"],
+    )
+    group.add_argument(
+        "--wandb-online",
+        action="store_true",
+        required=False,
+        help=PARAM_DESC["wandb_online"],
+    )
 
 
 def _prep_dataset_parser(parent_parser: argparse.ArgumentParser):

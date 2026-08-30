@@ -179,7 +179,8 @@ PARAM_DESC = {
     "'all': checkpoints are logged during training."
     "True: checkpoints are logged at the end of training, except when save_top_k_model == -1"
     "which also logs every checkpoint during training."
-    "False: (default), no checkpoint is logged.",
+    "False: (default), no checkpoint is logged. Requires --wandb-online.",
+    "wandb_online": "Sync logs and artifacts to the WandB server. Without this flag, WandB logging stays local (offline).",
     # parameters for merging predictions
     "pred_dir": "Path to the folder storing all replicate predictions",
     "preds": "Path to hdf5 files for predictions from each replicate run",

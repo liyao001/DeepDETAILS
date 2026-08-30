@@ -125,6 +125,7 @@ def deconv(
     resume_from_ckpt: Optional[str] = None,
     loads_trunc: Optional[int] = None,
     seq_only: Optional[bool] = False,
+    wandb_online: bool = False,
 ):
     """
     Deconvolve a bulk sequencing library with DETAILS
@@ -235,6 +236,7 @@ def deconv(
             wandb_project=wandb_project,
             wandb_entity=wandb_entity,
             wandb_upload_model=wandb_upload_model,
+            wandb_online=wandb_online,
             pass_mark="",
             training_readout="val_loss" if val_iter is not None else "train_loss",
         )

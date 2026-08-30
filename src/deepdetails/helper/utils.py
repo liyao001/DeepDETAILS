@@ -221,6 +221,7 @@ def get_trainer(
     wandb_project: Optional[str] = None,
     wandb_entity: Optional[str] = None,
     wandb_upload_model: Union[str, bool] = False,
+    wandb_online: bool = False,
     pass_mark: str = "1st",
     training_readout: str = "train_loss",
 ) -> tuple[pl.Trainer, str]:
@@ -257,6 +258,8 @@ def get_trainer(
         {wandb_entity}
     wandb_upload_model : Union[str, int]
         {wandb_upload_model}
+    wandb_online : bool
+        {wandb_online}
     pass_mark
     training_readout : str
         Metric monitored for checkpointing and early stopping.
@@ -268,9 +271,6 @@ def get_trainer(
     wbl.version : str
         Final effective WandB version string
     """.format(**PARAM_DESC)
-    # avoid reuse run records
-    wandb.finish()
-
     pass_str = f"_{pass_mark}" if pass_mark else ""
     ver_str = (
         f"{version}{pass_str}" if version else datetime.now().strftime("%y%m%d%H%M%S")
@@ -297,6 +297,8 @@ def get_trainer(
     )
 
     if not is_multi_gpu:
+        # Close any leftover run so retries do not reuse the previous record.
+        wandb.finish()
         wbl = WandbLogger(
             name=f"{study_name}{pass_str}",
             project=wandb_project,
@@ -305,7 +307,7 @@ def get_trainer(
             entity=wandb_entity,
             log_model=wandb_upload_model,  # pyrefly: ignore[bad-argument-type]
             save_dir=save_to,
-            offline=True,
+            offline=not wandb_online,
         )
         ver = str(wbl.version)
     else:
