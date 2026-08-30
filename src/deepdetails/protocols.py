@@ -679,6 +679,9 @@ def pred_to_bw(
         preds_to_bg_star,
     )
 
+    if binning and _Y_LENGTH % binning:
+        raise ValueError(f"--out-binning must divide {_Y_LENGTH}; got {binning}")
+
     with h5py.File(pred_file, "r") as f:
         n_clusters = f["preds"].attrs["n_clusters"]
         n_strands = f["preds"].attrs["n_targets"]
