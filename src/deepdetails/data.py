@@ -1,5 +1,5 @@
 import os
-from typing import Optional, Sequence
+from typing import Optional, Sequence, Union
 
 import h5py
 import numpy as np
@@ -10,7 +10,7 @@ import torch
 from torch.utils.data import Dataset
 
 from deepdetails.helper.prep_ds import extract_signal_from_bw, seq_to_one_hot
-from deepdetails.par_description import PARAM_DESC
+from deepdetails.par_description import PARAM_DESC, SplitMode
 
 
 def parse_regions(hdf5_handle: h5py.File) -> pd.DataFrame:
@@ -41,7 +41,7 @@ def parse_regions(hdf5_handle: h5py.File) -> pd.DataFrame:
 
 def _apply_region_filters(
     df: pd.DataFrame,
-    is_training: int,
+    is_training: Union[int, SplitMode],
     chromosomal_val: Optional[Sequence[str]],
     chromosomal_test: Optional[Sequence[str]],
     non_background_only: bool,
@@ -56,9 +56,9 @@ def _apply_region_filters(
     df : pd.DataFrame
         Region table. Column 3 holds the region type (1 = peak, 0 = background)
         and the optional column 4 holds the additional filter label.
-    is_training : int
-        0 : validation, 1 : training, 2 : testing. Any other value (e.g. -1)
-        skips chromosome-based splitting and keeps every region.
+    is_training : Union[int, SplitMode]
+        {is_training}. ``SplitMode.ALL`` (-1) skips chromosome-based
+        splitting and keeps every region.
     chromosomal_val : Optional[Sequence[str]]
         {chromosomal_validation}
     chromosomal_test : Optional[Sequence[str]]
@@ -84,7 +84,8 @@ def _apply_region_filters(
         wanted = 1 if enable_additional_filter else 0
         df = df.loc[df[4] == wanted, :].copy()
 
-    if is_training == 1:
+    split = SplitMode(int(is_training))
+    if split == SplitMode.TRAIN:
         v_set = set(chromosomal_val) if chromosomal_val is not None else set()
         t_set = set(chromosomal_test) if chromosomal_test is not None else set()
         df = df.loc[~df[0].isin(v_set.union(t_set)), :]
@@ -97,9 +98,9 @@ def _apply_region_filters(
             df = pos_df.sample(
                 n=pos_only_subset, replace=False, random_state=subset_seed
             )
-    elif is_training == 0 and chromosomal_val is not None:
+    elif split == SplitMode.VAL and chromosomal_val is not None:
         df = df.loc[df[0].isin(chromosomal_val), :]
-    elif is_training == 2 and chromosomal_test is not None:
+    elif split == SplitMode.TEST and chromosomal_test is not None:
         df = df.loc[df[0].isin(chromosomal_test), :]
     return df
 
@@ -113,7 +114,7 @@ class SequenceSignalDataset(Dataset):
         self,
         root: str,
         y_length: int = 1_000,
-        is_training: int = 1,
+        is_training: Union[int, SplitMode] = SplitMode.TRAIN,
         chromosomal_val: Optional[Sequence[str]] = None,
         chromosomal_test: Optional[Sequence[str]] = None,
         loads_trunc: Optional[int] = None,
@@ -130,8 +131,8 @@ class SequenceSignalDataset(Dataset):
             {dataset}
         y_length : int
             {y_length}
-        is_training : int
-            0 : validation, 1 : training, 2 : testing, by default 1
+        is_training : Union[int, SplitMode]
+            {is_training}
         chromosomal_val : Optional[Sequence[str]]
             {chromosomal_validation}
         chromosomal_test : Optional[Sequence[str]]
@@ -370,7 +371,7 @@ class DynamicDataset(Dataset):
         y_length: int = 1_000,
         target_sliding_sum: Optional[int] = 0,
         t_x: int = 4096,
-        is_training: int = 1,
+        is_training: Union[int, SplitMode] = SplitMode.TRAIN,
         chromosomal_val: Optional[Sequence[str]] = None,
         chromosomal_test: Optional[Sequence[str]] = None,
         loads_trunc: Optional[int] = None,
@@ -406,7 +407,7 @@ class DynamicDataset(Dataset):
             {y_length}
         target_sliding_sum : Optional[int]
             {target_sliding_sum}
-        is_training : int
+        is_training : Union[int, SplitMode]
             {is_training}
         chromosomal_val : Optional[Sequence[str]]
             {chromosomal_validation}
