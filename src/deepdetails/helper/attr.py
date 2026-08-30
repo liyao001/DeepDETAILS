@@ -291,8 +291,6 @@ def ixg(
     result_file : str
         results are written to `save_to/attr.h5`.
     """
-    # care for batchnorm + dropout
-    torch.set_grad_enabled(True)
     model.eval()
 
     data_iter = DataLoader(
