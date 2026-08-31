@@ -685,14 +685,16 @@ def bedgraph_to_bigwig(
             if not _is_unsorted_bedgraph_error(str(e)):
                 raise
             try:
+                # fmt: off
                 run_command(
                     ["env", "LC_ALL=C", "sort", "-o", sorted_file, "-k1,1", "-k2,2n", tmp_file],
                     raise_exception=True,
                 )
                 run_command(
-                    ["bedGraphToBigWig", sorted_file, chrom_size_path, out_bigwig_path,],
+                    ["bedGraphToBigWig", sorted_file, chrom_size_path, out_bigwig_path],
                     raise_exception=True,
                 )
+                # fmt: on
             except RuntimeError as retry_err:
                 raise retry_err from e
     finally:

@@ -168,7 +168,7 @@ typos = "*"
 default = { features = [], solve-group = "default" }
 dev = { features = ["dev"], solve-group = "default" }
 
-# Developer tasks live on the dev feature so `pixi run test` selects that env.
+# Developer tasks live on the dev feature.
 [tool.pixi.feature.dev.tasks]
 check = "hatch check"
 check-code = "hatch check code"

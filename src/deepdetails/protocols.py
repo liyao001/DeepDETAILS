@@ -689,7 +689,12 @@ def pred_to_bw(
         n_strands = f["preds"].attrs["n_targets"]
         cluster_names = f["preds"].attrs["cluster_names"]
 
-    pairs = [(i, j) for i in range(n_clusters) for j in range(n_strands)]
+    pairs = [
+        (i, j)
+        for i in range(n_clusters)
+        for j in range(n_strands)
+        if cluster_names[i] != __DD_OTHERS_MAGIC
+    ]
 
     jobs = []
     for ci, si in pairs:
@@ -875,7 +880,7 @@ def prepare_dataset(
             )
             n_after = extended_regions.shape[0]
             logger.warning(
-                f"{n_after - n_before} regions removed because of their lengths"
+                f"{n_before - n_after} regions removed because of their lengths"
             )
 
         # sample background regions
