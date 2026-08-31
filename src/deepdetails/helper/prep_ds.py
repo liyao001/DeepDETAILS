@@ -190,7 +190,7 @@ def generate_gc_matched_random_regions(
         0~2: coordinates
         3: GC%
     """
-    pybedtools.set_tempdir(".")
+    set_tmp_for_pbt()
 
     if type(input_region_file) is pybedtools.BedTool:
         bed_obj = pybedtools.BedTool.from_dataframe(
@@ -636,10 +636,15 @@ def build_data_volume(
             .to_dataframe(disable_auto_names=True, header=None, skiprows=1)
         )
 
-        for i, row in tqdm(regions.iterrows(), total=regions.shape[0], disable=True):
-            dset_seq[i, :, :] = seq_to_one_hot(
-                epig_fa_df.loc[i, epig_fa_df.shape[1] - 1]
+        seq_col = epig_fa_df.shape[1] - 1
+        for i, row in enumerate(
+            tqdm(
+                regions.itertuples(index=False),
+                total=regions.shape[0],
+                disable=True,
             )
+        ):
+            dset_seq[i, :, :] = seq_to_one_hot(epig_fa_df.iloc[i, seq_col])
 
             try:
                 dset_bulk[i, 0, :] = extract_signal_from_bw(

@@ -715,7 +715,7 @@ class DynamicDataset(Dataset):
         if self.y_truncation > 0:
             y = bulk[:, self.y_truncation : -self.y_truncation].clone().abs()
         else:
-            y = torch.tensor(bulk).abs()
+            y = bulk.clone().abs()
 
         loads = torch.zeros(self.n_clusters)
         for i in range(self.n_clusters):
