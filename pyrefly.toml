@@ -1,0 +1,5 @@
+project-includes = ["src/deepdetails", "tests"]
+search-path = ["src", "tests"]
+preset = "legacy"
+disable-search-path-heuristics = true
+ignore-missing-imports = ["pyBigWig", "seaborn"]

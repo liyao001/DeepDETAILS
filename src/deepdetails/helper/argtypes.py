@@ -6,6 +6,7 @@ It is imported eagerly by ``deepdetails.cli`` to build the argument parser
 pytorch_lightning, wandb, pybedtools, ...) would slow down every CLI
 invocation.
 """
+
 import argparse
 import os
 from typing import Sequence
@@ -112,10 +113,15 @@ def alpha_as_fraction(value: str) -> float:
         )
     return parsed / 100
 
+
 class DevicesAction(argparse.Action):
     def __call__(
-            self, parser: argparse.ArgumentParser, namespace: argparse.Namespace,
-            values: Sequence[str], option_string: str | None = None):
+        self,
+        parser: argparse.ArgumentParser,
+        namespace: argparse.Namespace,
+        values: Sequence[str],
+        option_string: str | None = None,
+    ):
         if values == ["auto"]:
             setattr(namespace, self.dest, "auto")
             return

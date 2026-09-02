@@ -1,5 +1,5 @@
 import os
-from typing import Optional, Sequence
+from typing import Optional, Sequence, Union
 
 import h5py
 import numpy as np
@@ -10,7 +10,7 @@ import torch
 from torch.utils.data import Dataset
 
 from deepdetails.helper.prep_ds import extract_signal_from_bw, seq_to_one_hot
-from deepdetails.par_description import PARAM_DESC
+from deepdetails.par_description import PARAM_DESC, SplitMode
 
 
 def parse_regions(hdf5_handle: h5py.File) -> pd.DataFrame:
@@ -39,16 +39,90 @@ def parse_regions(hdf5_handle: h5py.File) -> pd.DataFrame:
     return df
 
 
+def _apply_region_filters(
+    df: pd.DataFrame,
+    is_training: Union[int, SplitMode],
+    chromosomal_val: Optional[Sequence[str]],
+    chromosomal_test: Optional[Sequence[str]],
+    non_background_only: bool,
+    enable_additional_filter: Optional[bool],
+    pos_only_subset: Optional[int],
+    subset_seed: Optional[int],
+) -> pd.DataFrame:
+    """Select the regions belonging to one train/validation/test split.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Region table. Column 3 holds the region type (1 = peak, 0 = background)
+        and the optional column 4 holds the additional filter label.
+    is_training : Union[int, SplitMode]
+        {is_training}. ``SplitMode.ALL`` (-1) skips chromosome-based
+        splitting and keeps every region.
+    chromosomal_val : Optional[Sequence[str]]
+        {chromosomal_validation}
+    chromosomal_test : Optional[Sequence[str]]
+        {chromosomal_testing}
+    non_background_only : bool
+        Keep only regions labelled 1 in column 3.
+    enable_additional_filter : Optional[bool]
+        True keeps regions labelled 1 in column 4, False keeps those labelled 0.
+        None disables the filter.
+    pos_only_subset : Optional[int]
+        Sample this many positive regions from the training split.
+    subset_seed : Optional[int]
+        Seed for `pos_only_subset` sampling.
+
+    Returns
+    -------
+    df : pd.DataFrame
+        Filtered regions, still carrying the original index.
+    """.format(**PARAM_DESC)
+    if non_background_only:
+        df = df.loc[df[3] == 1].copy()
+    if enable_additional_filter is not None and df.shape[1] > 4:
+        wanted = 1 if enable_additional_filter else 0
+        df = df.loc[df[4] == wanted, :].copy()
+
+    split = SplitMode(int(is_training))
+    if split == SplitMode.TRAIN:
+        v_set = set(chromosomal_val) if chromosomal_val is not None else set()
+        t_set = set(chromosomal_test) if chromosomal_test is not None else set()
+        df = df.loc[~df[0].isin(v_set.union(t_set)), :]
+        if isinstance(pos_only_subset, int) and pos_only_subset > 0:
+            pos_df = df[df[3] == 1]
+            if pos_only_subset > pos_df.shape[0]:
+                raise ValueError(
+                    "Number of subset cannot be larger than the positive training set"
+                )
+            df = pos_df.sample(
+                n=pos_only_subset, replace=False, random_state=subset_seed
+            )
+    elif split == SplitMode.VAL and chromosomal_val is not None:
+        df = df.loc[df[0].isin(chromosomal_val), :]
+    elif split == SplitMode.TEST and chromosomal_test is not None:
+        df = df.loc[df[0].isin(chromosomal_test), :]
+    return df
+
+
 class SequenceSignalDataset(Dataset):
     """
     Dataset class for both one-hot encoded sequences and signal tracks
     """
 
-    def __init__(self, root: str, y_length: int = 1_000,
-                 is_training: int = 1, chromosomal_val: Optional[Sequence[str]] = None,
-                 chromosomal_test: Optional[Sequence[str]] = None, loads_trunc: Optional[int] = None,
-                 pos_only_subset: Optional[int] = None, non_background_only: bool = False,
-                 subset_seed: Optional[int] = None, enable_additional_filter: Optional[bool] = None):
+    def __init__(
+        self,
+        root: str,
+        y_length: int = 1_000,
+        is_training: Union[int, SplitMode] = SplitMode.TRAIN,
+        chromosomal_val: Optional[Sequence[str]] = None,
+        chromosomal_test: Optional[Sequence[str]] = None,
+        loads_trunc: Optional[int] = None,
+        pos_only_subset: Optional[int] = None,
+        non_background_only: bool = False,
+        subset_seed: Optional[int] = None,
+        enable_additional_filter: Optional[bool] = None,
+    ):
         """
 
         Parameters
@@ -57,8 +131,8 @@ class SequenceSignalDataset(Dataset):
             {dataset}
         y_length : int
             {y_length}
-        is_training : int
-            0 : validation, 1 : training, 2 : testing, by default 1
+        is_training : Union[int, SplitMode]
+            {is_training}
         chromosomal_val : Optional[Sequence[str]]
             {chromosomal_validation}
         chromosomal_test : Optional[Sequence[str]]
@@ -86,7 +160,9 @@ class SequenceSignalDataset(Dataset):
         """.format(**PARAM_DESC)
         self.expected_data_file = os.path.join(root, "data.h5")
         if not os.path.exists(self.expected_data_file):
-            raise FileNotFoundError(f"Expected dataset file not found: {self.expected_data_file}")
+            raise FileNotFoundError(
+                f"Expected dataset file not found: {self.expected_data_file}"
+            )
         self.dataset_h5 = None
         self.dataset = None
         self.load_groundtruth = False
@@ -98,9 +174,13 @@ class SequenceSignalDataset(Dataset):
 
         with h5py.File(self.expected_data_file, "r") as fh:
             if "dec" not in fh:
-                raise KeyError(f"{self.expected_data_file} is missing required group 'dec'")
+                raise KeyError(
+                    f"{self.expected_data_file} is missing required group 'dec'"
+                )
             if "regions" not in fh:
-                raise KeyError(f"{self.expected_data_file} is missing required dataset 'regions'")
+                raise KeyError(
+                    f"{self.expected_data_file} is missing required dataset 'regions'"
+                )
             self.df = parse_regions(fh)
 
             self.n_targets = fh["dec"].attrs["n_targets"]
@@ -119,8 +199,9 @@ class SequenceSignalDataset(Dataset):
                 norm_df = pd.DataFrame(fh["scatac_norm"][:])
                 if norm_df.shape[1] != 2:
                     raise ValueError(
-                        "atac_norm_factor_file should have exactly two columns: cluster label and norm coef")
-                self.norm_factors = norm_df[1].values
+                        "atac_norm_factor_file should have exactly two columns: cluster label and norm coef"
+                    )
+                self.norm_factors = np.asarray(norm_df[1].to_numpy(), dtype=float)
                 self.has_acc_norm = True
 
             # load reference/groundtruth
@@ -145,26 +226,16 @@ class SequenceSignalDataset(Dataset):
             msg = "region_file should have at least 4 cols: chr, start, end, and region_type. {self.df.head()}"
             raise ValueError(msg)
 
-        if non_background_only:
-            self.df = self.df.loc[self.df[3] == 1].copy()
-        if enable_additional_filter is not None and self.df.shape[1] > 4:
-            self.df = self.df.loc[self.df[4] == 1 if enable_additional_filter else 0, :].copy()
-        if is_training == 1:
-            v_set = set(chromosomal_val) if chromosomal_val is not None else set()
-            t_set = set(chromosomal_test) if chromosomal_test is not None else set()
-            vt_chromosomes = v_set.union(t_set)
-            self.df = self.df.loc[~self.df[0].isin(vt_chromosomes), :]
-            if isinstance(pos_only_subset, int) and pos_only_subset > 0:
-                pos_df = self.df[self.df[3] == 1]
-                if pos_only_subset > pos_df.shape[0]:
-                    raise ValueError("Number of subset cannot be larger than the positive training set")
-                self.df = pos_df.sample(
-                    n=pos_only_subset, replace=False, random_state=subset_seed
-                )
-        elif is_training == 0 and chromosomal_val is not None:
-            self.df = self.df.loc[self.df[0].isin(chromosomal_val), :]
-        elif is_training == 2 and chromosomal_test is not None:
-            self.df = self.df.loc[self.df[0].isin(chromosomal_test), :]
+        self.df = _apply_region_filters(
+            self.df,
+            is_training=is_training,
+            chromosomal_val=chromosomal_val,
+            chromosomal_test=chromosomal_test,
+            non_background_only=non_background_only,
+            enable_additional_filter=enable_additional_filter,
+            pos_only_subset=pos_only_subset,
+            subset_seed=subset_seed,
+        )
         self.df.reset_index(drop=False, inplace=True)
 
     @property
@@ -187,12 +258,12 @@ class SequenceSignalDataset(Dataset):
     def __len__(self):
         return self.df.shape[0]
 
-    def __getitem__(self, idx: int):
+    def __getitem__(self, index: int):
         """
 
         Parameters
         ----------
-        idx : int
+        index : int
             data index
 
         Returns
@@ -225,38 +296,60 @@ class SequenceSignalDataset(Dataset):
             self.dataset_h5 = h5py.File(self.expected_data_file, "r")
             self.dataset = self.dataset_h5["dec"]
 
-        hit = self.df.iloc[idx]
+        hit = self.df.iloc[index]
         abs_i = hit["index"]
 
+        # pyrefly: ignore[unsupported-operation]
         seq = torch.from_numpy(np.abs(self.dataset["seq"][abs_i, :, :])).float()
+        # pyrefly: ignore[unsupported-operation]
         acc = torch.from_numpy(self.dataset["acc"][abs_i, :, :]).float()
 
+        # pyrefly: ignore[not-iterable]
         if self.load_groundtruth and "ref" in self.dataset:
             ground_truth = []
             for cid in range(self.n_clusters):
                 offset = self.n_targets * cid
                 ground_truth.append(
-                    torch.from_numpy(self.dataset["ref"][abs_i, offset:offset + self.n_targets,
-                                 self.y_truncation:-self.y_truncation]).abs())
+                    torch.from_numpy(
+                        # pyrefly: ignore[unsupported-operation]
+                        self.dataset["ref"][
+                            abs_i,
+                            offset : offset + self.n_targets,
+                            self.y_truncation : -self.y_truncation,
+                        ]
+                    ).abs()
+                )
         else:
             ground_truth = []
 
         if self.y_truncation > 0:
-            y = torch.from_numpy(self.dataset["bulk"][abs_i, :, self.y_truncation:-self.y_truncation]).abs()
+            y = torch.from_numpy(
+                # pyrefly: ignore[unsupported-operation]
+                self.dataset["bulk"][abs_i, :, self.y_truncation : -self.y_truncation]
+            ).abs()
         else:
+            # pyrefly: ignore[unsupported-operation]
             y = torch.from_numpy(self.dataset["bulk"][abs_i, :, :]).abs()
 
         loads = torch.zeros(self.n_clusters)
         for i in range(self.n_clusters):
             if self.loads_trunc > 0:
-                loads[i] = acc[i, self.loads_trunc:-self.loads_trunc].mean() * self.norm_factors[i]
+                loads[i] = (
+                    acc[i, self.loads_trunc : -self.loads_trunc].mean()
+                    * self.norm_factors[i]
+                )
             else:
                 loads[i] = acc[i, :].mean() * self.norm_factors[i]
 
         misc_tuple = (hit[0], hit[1], hit[2], hit[3], self.prior)
         return (
-            (seq, acc), y.sum(axis=1), y, ground_truth,
-            self.get_weights(loads), misc_tuple)
+            (seq, acc),
+            y.sum(dim=1),
+            y,
+            ground_truth,
+            self.get_weights(loads),
+            misc_tuple,
+        )
 
 
 class DynamicDataset(Dataset):
@@ -264,16 +357,30 @@ class DynamicDataset(Dataset):
     Dataset class for both one-hot encoded sequences and signal tracks
     """
 
-    def __init__(self, fa_file: str, pl_bulk_bw_file: str, acc_bw_files: Sequence[str], regions_file: str,
-                 mn_bulk_bw_file: Optional[str] = None, pl_ct_bw_files: Optional[Sequence[str]] = None,
-                 mn_ct_bw_files: Optional[Sequence[str]] = None, sc_norm_file: Optional[str] = None,
-                 cluster_names: Optional[Sequence[str]] = None, y_length: int = 1_000,
-                 target_sliding_sum: Optional[int] = 0, t_x: int = 4096,
-                 is_training: int = 1, chromosomal_val: Optional[Sequence[str]] = None,
-                 chromosomal_test: Optional[Sequence[str]] = None, loads_trunc: Optional[int] = None,
-                 pos_only_subset: Optional[int] = None, non_background_only: bool = False,
-                 subset_seed: Optional[int] = None, enable_additional_filter: Optional[bool] = None,
-                 use_bulk_constraint: Optional[bool] = False):
+    def __init__(
+        self,
+        fa_file: str,
+        pl_bulk_bw_file: str,
+        acc_bw_files: Sequence[str],
+        regions_file: str,
+        mn_bulk_bw_file: Optional[str] = None,
+        pl_ct_bw_files: Optional[Sequence[str]] = None,
+        mn_ct_bw_files: Optional[Sequence[str]] = None,
+        sc_norm_file: Optional[str] = None,
+        cluster_names: Optional[Sequence[str]] = None,
+        y_length: int = 1_000,
+        target_sliding_sum: Optional[int] = 0,
+        t_x: int = 4096,
+        is_training: Union[int, SplitMode] = SplitMode.TRAIN,
+        chromosomal_val: Optional[Sequence[str]] = None,
+        chromosomal_test: Optional[Sequence[str]] = None,
+        loads_trunc: Optional[int] = None,
+        pos_only_subset: Optional[int] = None,
+        non_background_only: bool = False,
+        subset_seed: Optional[int] = None,
+        enable_additional_filter: Optional[bool] = None,
+        use_bulk_constraint: Optional[bool] = False,
+    ):
         """
 
         Parameters
@@ -300,7 +407,7 @@ class DynamicDataset(Dataset):
             {y_length}
         target_sliding_sum : Optional[int]
             {target_sliding_sum}
-        is_training : int
+        is_training : Union[int, SplitMode]
             {is_training}
         chromosomal_val : Optional[Sequence[str]]
             {chromosomal_validation}
@@ -330,11 +437,15 @@ class DynamicDataset(Dataset):
 
         """.format(**PARAM_DESC)
         if not os.path.exists(pl_bulk_bw_file):
-            raise FileNotFoundError(f"Bulk forward-strand BigWig not found: {pl_bulk_bw_file}")
+            raise FileNotFoundError(
+                f"Bulk forward-strand BigWig not found: {pl_bulk_bw_file}"
+            )
         self.pl_bulk_bw_file = pl_bulk_bw_file
         if mn_bulk_bw_file is not None:
             if not os.path.exists(mn_bulk_bw_file):
-                raise FileNotFoundError(f"Bulk reverse-strand BigWig not found: {mn_bulk_bw_file}")
+                raise FileNotFoundError(
+                    f"Bulk reverse-strand BigWig not found: {mn_bulk_bw_file}"
+                )
         self.mn_bulk_bw_file = mn_bulk_bw_file
 
         if not os.path.exists(fa_file):
@@ -343,7 +454,9 @@ class DynamicDataset(Dataset):
 
         missing_acc_files = [f for f in acc_bw_files if not os.path.exists(f)]
         if missing_acc_files:
-            raise FileNotFoundError(f"Accessibility BigWig file(s) not found: {missing_acc_files}")
+            raise FileNotFoundError(
+                f"Accessibility BigWig file(s) not found: {missing_acc_files}"
+            )
         self.acc_bw_files = acc_bw_files
 
         if not os.path.exists(regions_file):
@@ -354,13 +467,17 @@ class DynamicDataset(Dataset):
         if pl_ct_bw_files is not None:
             missing_pl_ct_files = [f for f in pl_ct_bw_files if not os.path.exists(f)]
             if missing_pl_ct_files:
-                raise FileNotFoundError(f"Reference forward-strand BigWig file(s) not found: {missing_pl_ct_files}")
+                raise FileNotFoundError(
+                    f"Reference forward-strand BigWig file(s) not found: {missing_pl_ct_files}"
+                )
             self.load_groundtruth = True
         self.pl_ct_bw_files = pl_ct_bw_files
         if mn_ct_bw_files is not None:
             missing_mn_ct_files = [f for f in mn_ct_bw_files if not os.path.exists(f)]
             if missing_mn_ct_files:
-                raise FileNotFoundError(f"Reference reverse-strand BigWig file(s) not found: {missing_mn_ct_files}")
+                raise FileNotFoundError(
+                    f"Reference reverse-strand BigWig file(s) not found: {missing_mn_ct_files}"
+                )
         self.mn_ct_bw_files = mn_ct_bw_files
 
         self.fa_obj = None
@@ -371,7 +488,7 @@ class DynamicDataset(Dataset):
         self.pl_ct_bw_objs = None
         self.mn_ct_bw_objs = None
 
-        self.sliding_sum = target_sliding_sum
+        self.sliding_sum = 0 if target_sliding_sum is None else target_sliding_sum
 
         self.has_acc_norm = False
         self.prior = torch.tensor(0)
@@ -379,7 +496,11 @@ class DynamicDataset(Dataset):
         # automatically determined values
         self.n_targets = 1 if self.mn_bulk_bw_file is None else 2
         self.n_clusters = len(self.acc_bw_files)
-        self.cluster_names = cluster_names if cluster_names is not None else [f"C{i}" for i in range(self.n_clusters)]
+        self.cluster_names = (
+            cluster_names
+            if cluster_names is not None
+            else [f"C{i}" for i in range(self.n_clusters)]
+        )
         if len(self.cluster_names) != self.n_clusters:
             raise ValueError("len(cluster_names) != n_clusters")
 
@@ -393,8 +514,9 @@ class DynamicDataset(Dataset):
                 raise IOError(f"{sc_norm_file} not found")
             if norm_df.shape[1] != 2:
                 raise ValueError(
-                    "atac_norm_factor_file should have exactly two columns: cluster label and norm coef")
-            self.norm_factors = norm_df[1].values
+                    "atac_norm_factor_file should have exactly two columns: cluster label and norm coef"
+                )
+            self.norm_factors = np.asarray(norm_df[1].to_numpy(), dtype=float)
             self.has_acc_norm = True
 
         self._t_x = t_x
@@ -416,26 +538,16 @@ class DynamicDataset(Dataset):
         if use_bulk_constraint:
             self.bulk_constraint()
 
-        if non_background_only:
-            self.df = self.df.loc[self.df[3] == 1].copy()
-        if enable_additional_filter is not None and self.df.shape[1] > 4:
-            self.df = self.df.loc[self.df[4] == 1 if enable_additional_filter else 0, :].copy()
-        if is_training == 1:
-            v_set = set(chromosomal_val) if chromosomal_val is not None else set()
-            t_set = set(chromosomal_test) if chromosomal_test is not None else set()
-            vt_chromosomes = v_set.union(t_set)
-            self.df = self.df.loc[~self.df[0].isin(vt_chromosomes), :]
-            if isinstance(pos_only_subset, int) and pos_only_subset > 0:
-                pos_df = self.df[self.df[3] == 1]
-                if pos_only_subset > pos_df.shape[0]:
-                    raise ValueError("Number of subset cannot be larger than the positive training set")
-                self.df = pos_df.sample(
-                    n=pos_only_subset, replace=False, random_state=subset_seed
-                )
-        elif is_training == 0 and chromosomal_val is not None:
-            self.df = self.df.loc[self.df[0].isin(chromosomal_val), :]
-        elif is_training == 2 and chromosomal_test is not None:
-            self.df = self.df.loc[self.df[0].isin(chromosomal_test), :]
+        self.df = _apply_region_filters(
+            self.df,
+            is_training=is_training,
+            chromosomal_val=chromosomal_val,
+            chromosomal_test=chromosomal_test,
+            non_background_only=non_background_only,
+            enable_additional_filter=enable_additional_filter,
+            pos_only_subset=pos_only_subset,
+            subset_seed=subset_seed,
+        )
         self.df.reset_index(drop=False, inplace=True)
 
     @property
@@ -454,7 +566,7 @@ class DynamicDataset(Dataset):
     def safe_sum(bwo, row):
         raw_sum = bwo.stats(row[0], row[1], row[2], type="sum")[0]
         if raw_sum is None:
-            raw_sum = 0.
+            raw_sum = 0.0
         if raw_sum < 0:
             raw_sum *= -1
         return raw_sum
@@ -465,7 +577,9 @@ class DynamicDataset(Dataset):
         if self.mn_bulk_bw_file is not None:
             bulk_bws.append(pyBigWig.open(self.mn_bulk_bw_file))
 
-        bulk_signal = self.df.apply(lambda x: sum([DynamicDataset.safe_sum(b, x) for b in bulk_bws]), axis=1)
+        bulk_signal = self.df.apply(
+            lambda x: sum([DynamicDataset.safe_sum(b, x) for b in bulk_bws]), axis=1
+        )
         self.df.loc[bulk_signal == 0, 3] = 0
 
         for bw in bulk_bws:
@@ -479,12 +593,12 @@ class DynamicDataset(Dataset):
     def __len__(self):
         return self.df.shape[0]
 
-    def __getitem__(self, idx: int):
+    def __getitem__(self, index: int):
         """
 
         Parameters
         ----------
-        idx : int
+        index : int
             data index
 
         Returns
@@ -526,43 +640,99 @@ class DynamicDataset(Dataset):
         if self.fa_obj is None:
             self.fa_obj = pyfaidx.Fasta(self.fa_file)
 
-        hit = self.df.iloc[idx]
+        hit = self.df.iloc[index]
 
         chrom, start, end = hit[0], hit[1], hit[2]
         raw_seq = self.fa_obj[chrom][start:end].seq.upper()
         seq = torch.abs(torch.tensor(seq_to_one_hot(raw_seq))).float()
 
-        acc = torch.stack([torch.tensor(extract_signal_from_bw(bo, chrom, start, end, sliding_sum=self.sliding_sum)) for bo in self.acc_bw_objs])
+        acc = torch.stack(
+            [
+                torch.tensor(
+                    extract_signal_from_bw(
+                        bo, chrom, start, end, sliding_sum=self.sliding_sum
+                    )
+                )
+                for bo in self.acc_bw_objs  # pyrefly: ignore[not-iterable]
+            ]
+        )
         # acc = torch.tensor(self.dataset["acc"][abs_i, :, :])
 
         if self.pl_ct_bw_files:
             ground_truth = []
             for cid in range(self.n_clusters):
-                gt_raw = [torch.tensor(extract_signal_from_bw(self.pl_ct_bw_objs[cid], chrom, start, end, sliding_sum=self.sliding_sum)),]
+                gt_raw = [
+                    torch.tensor(
+                        extract_signal_from_bw(
+                            # pyrefly: ignore[unsupported-operation]
+                            self.pl_ct_bw_objs[cid],
+                            chrom,
+                            start,
+                            end,
+                            sliding_sum=self.sliding_sum,
+                        )
+                    ),
+                ]
                 if self.mn_ct_bw_objs:
-                    gt_raw.append(torch.tensor(extract_signal_from_bw(self.mn_ct_bw_objs[cid], chrom, start, end, sliding_sum=self.sliding_sum)))
+                    gt_raw.append(
+                        torch.tensor(
+                            extract_signal_from_bw(
+                                self.mn_ct_bw_objs[cid],
+                                chrom,
+                                start,
+                                end,
+                                sliding_sum=self.sliding_sum,
+                            )
+                        )
+                    )
                 ref = torch.stack(gt_raw)
-                ground_truth.append(ref[:, self.y_truncation:-self.y_truncation].abs())
+                ground_truth.append(
+                    ref[:, self.y_truncation : -self.y_truncation].abs()
+                )
         else:
             ground_truth = []
 
-        raw_bulk = [torch.tensor(extract_signal_from_bw(self.pl_bulk_bw_obj, chrom, start, end, sliding_sum=self.sliding_sum))]
+        raw_bulk = [
+            torch.tensor(
+                extract_signal_from_bw(
+                    self.pl_bulk_bw_obj, chrom, start, end, sliding_sum=self.sliding_sum
+                )
+            )
+        ]
         if self.mn_bulk_bw_obj:
-            raw_bulk.append(torch.tensor(extract_signal_from_bw(self.mn_bulk_bw_obj, chrom, start, end, sliding_sum=self.sliding_sum)))
+            raw_bulk.append(
+                torch.tensor(
+                    extract_signal_from_bw(
+                        self.mn_bulk_bw_obj,
+                        chrom,
+                        start,
+                        end,
+                        sliding_sum=self.sliding_sum,
+                    )
+                )
+            )
         bulk = torch.stack(raw_bulk)
         if self.y_truncation > 0:
-            y = bulk[:, self.y_truncation:-self.y_truncation].clone().abs()
+            y = bulk[:, self.y_truncation : -self.y_truncation].clone().abs()
         else:
-            y = torch.tensor(bulk).abs()
+            y = bulk.clone().abs()
 
         loads = torch.zeros(self.n_clusters)
         for i in range(self.n_clusters):
             if self.loads_trunc > 0:
-                loads[i] = acc[i, self.loads_trunc:-self.loads_trunc].mean() * self.norm_factors[i]
+                loads[i] = (
+                    acc[i, self.loads_trunc : -self.loads_trunc].mean()
+                    * self.norm_factors[i]
+                )
             else:
                 loads[i] = acc[i, :].mean() * self.norm_factors[i]
 
         misc_tuple = (hit[0], hit[1], hit[2], hit[3], self.prior)
         return (
-            (seq, acc), y.sum(axis=1), y, ground_truth,
-            self.get_weights(loads), misc_tuple)
+            (seq, acc),
+            y.sum(dim=1),
+            y,
+            ground_truth,
+            self.get_weights(loads),
+            misc_tuple,
+        )

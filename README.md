@@ -33,7 +33,7 @@ pip install DeepDETAILS
 DeepDETAILS requires the following input files:
 * Strand-specific signals for the bulk library (bigWig format)
 * Region of interests (e.g. peaks) in the bulk library (bed format)
-* Aligned fragments from the reference sc/snATAC-seq (bed-like tabular format, required columns: chrom, chromStart, chromEnd, barcode, and readSupport). Example
+* Aligned fragments from the reference sc/snATAC-seq (bed-like tabular format, required columns: chrom, chromStart, chromEnd, barcode, and readSupport). Records should be sorted by their coordinates (`sort -k1,1 -k2,2n`).
 * Cell type annotation for each cell barcode (tabular format, required columns: barcode and cell type annotation).
 * Reference genome sequence (fasta format).
 * Chromosome size.
