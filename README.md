@@ -14,7 +14,7 @@
 (`bedtools`, `bedGraphToBigWig`) are installed automatically:
 
 ```console
-conda install -c bioconda -c conda-forge "pytorch=2.6.0=cuda*" deepdetails
+conda install -c bioconda -c conda-forge "pytorch=*=cuda*" deepdetails
 ```
 
 Alternatively, install with `pip` (you must provide the binaries yourself):
@@ -32,7 +32,7 @@ pip install DeepDETAILS
 ### Step 1: Prepare datasets for deconvolution
 DeepDETAILS requires the following input files:
 * Strand-specific signals for the bulk library (bigWig format)
-* Region of interests (e.g. peaks) in the bulk library (bed format)
+* Regions of interest (e.g. peaks) in the bulk library (bed format)
 * Aligned fragments from the reference sc/snATAC-seq (bed-like tabular format, required columns: chrom, chromStart, chromEnd, barcode, and readSupport). Records should be sorted by their coordinates (`sort -k1,1 -k2,2n`).
 * Cell type annotation for each cell barcode (tabular format, required columns: barcode and cell type annotation).
 * Reference genome sequence (fasta format).
@@ -74,7 +74,7 @@ The outputs from a successful deconvolution process look like the following:
 ```
 
 ### Step 3: Visualize the results (optional)
-This step exports deconvolved signal tracks (bigWig) to visualize the signals in each cell type, and it's optional. 
+This step exports deconvolved signal tracks (bigWig) to visualize the signals in each cell type, and it's optional.
 You need to locate the exported predictions from the previous step by looking for files like `sample-name.predictions.h5`. 
 After you get the file, you can run the following command:
 ```shell
@@ -92,9 +92,9 @@ This step exports sequence attribution tracks from trained DeepDETAILS models (u
 
 ```shell
 deepdetails attr \
-  -m sample-a/250212144109/epoch=0-step=2538.ckpt \
-  --dataset ./dataset \
-  --chrom-size chrNameLength.txt
+    -m sample-a/250212144109/epoch=0-step=2538.ckpt \
+    --dataset ./dataset \
+    --chrom-size chrNameLength.txt
 ```
 
 ## Reference
