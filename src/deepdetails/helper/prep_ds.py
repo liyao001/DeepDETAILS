@@ -1,7 +1,7 @@
 import gzip
 import logging
 import os
-from typing import List, Optional, Sequence, Tuple, Union
+from typing import Any, List, Optional, Sequence, Union
 
 import h5py
 import numpy as np
@@ -15,7 +15,9 @@ from deepdetails.helper.utils import bedgraph_to_bigwig, set_tmp_for_pbt, slugif
 from deepdetails.par_description import PARAM_DESC
 
 logger = logging.getLogger(__name__)
-logging.basicConfig(format="%(levelname)s | %(asctime)s | %(message)s", level=logging.INFO)
+logging.basicConfig(
+    format="%(levelname)s | %(asctime)s | %(message)s", level=logging.INFO
+)
 
 
 def _midpoint_generator(bed_regions: pybedtools.BedTool):
@@ -30,6 +32,7 @@ def _midpoint_generator(bed_regions: pybedtools.BedTool):
 
     """
     from pybedtools.featurefuncs import midpoint
+
     try:
         for region in bed_regions:
             yield midpoint(region)
@@ -37,8 +40,11 @@ def _midpoint_generator(bed_regions: pybedtools.BedTool):
         logger.warning(e)
 
 
-def extend_regions_from_mid_points(region: Union[str, pybedtools.BedTool, pd.DataFrame],
-                                   extensions: Tuple[int, int], chromosome_size: str) -> pd.DataFrame:
+def extend_regions_from_mid_points(
+    region: Union[str, pybedtools.BedTool, pd.DataFrame],
+    extensions: tuple[int, int],
+    chromosome_size: str,
+) -> pd.DataFrame:
     """
     Extend regions from their middle points
 
@@ -70,14 +76,21 @@ def extend_regions_from_mid_points(region: Union[str, pybedtools.BedTool, pd.Dat
 
     mid_points = pybedtools.BedTool(_midpoint_generator(bed_obj))
     if os.path.exists(chromosome_size) and os.path.isfile(chromosome_size):
-        extended_regions = mid_points.slop(l=extensions[0], r=extensions[1], g=chromosome_size)
+        extended_regions = mid_points.slop(
+            l=extensions[0], r=extensions[1], g=chromosome_size
+        )
     else:
-        extended_regions = mid_points.slop(l=extensions[0], r=extensions[1], genome=chromosome_size)
+        extended_regions = mid_points.slop(
+            l=extensions[0], r=extensions[1], genome=chromosome_size
+        )
     return extended_regions.to_dataframe(disable_auto_names=True, header=None)
 
 
-def combine_regions(region_files: Union[tuple[str,], list[str]], allowed_chrs: Optional[set] = None,
-                    merge_overlap: int = 0) -> pd.DataFrame:
+def combine_regions(
+    region_files: Union[tuple[str,], list[str]],
+    allowed_chrs: set[str] | None = None,
+    merge_overlap: int = 0,
+) -> pd.DataFrame:
     """Combine regions defined in multiple files
 
     Parameters
@@ -96,31 +109,50 @@ def combine_regions(region_files: Union[tuple[str,], list[str]], allowed_chrs: O
         Combined regions in a DataFrame with three columns
     """
     if allowed_chrs is None:
-        allowed_chrs = {}
+        allowed_chrs = set()
     sub_dfs = [
-        pd.read_csv(rf, sep="\t", header=None, usecols=[0, 1, 2]) for rf in region_files if os.path.exists(rf)
+        pd.read_csv(rf, sep="\t", header=None, usecols=[0, 1, 2])
+        for rf in region_files
+        if os.path.exists(rf)
     ]
-    df = pd.concat(sub_dfs, ignore_index=True).sort_values([0, 1])
-    df = df.loc[
-        (~df[0].str.contains("_")) & (~df[0].str.contains("EBV")) & (~df[0].str.contains("chrM"))
-        ].copy().reset_index(drop=True)
+    df = pd.concat(sub_dfs, ignore_index=True).sort_values(
+        by=[0, 1]  # pyrefly: ignore[bad-argument-type]
+    )
+    df = (
+        df.loc[
+            (~df[0].str.contains("_"))
+            & (~df[0].str.contains("EBV"))
+            & (~df[0].str.contains("chrM"))
+        ]
+        .copy()
+        .reset_index(drop=True)
+    )
     # drop identical regions if any
     df.drop_duplicates(subset=[0, 1, 2], inplace=True)
     if len(allowed_chrs) > 0:
         df = df.loc[df[0].isin(allowed_chrs), :]
     if merge_overlap > 0:
-        df = pybedtools.BedTool.from_dataframe(df).merge(
-            d=-merge_overlap).to_dataframe(disable_auto_names=True, header=None)
+        df = (
+            pybedtools.BedTool.from_dataframe(df)
+            .merge(d=-merge_overlap)
+            .to_dataframe(disable_auto_names=True, header=None)
+        )
 
     return df
 
 
 def generate_gc_matched_random_regions(
-        input_region_file: Union[str, pd.DataFrame, pybedtools.BedTool], genome_size_file: str,
-        genome_fasta_file: str, sample_scale_factor: float = 1.,
-        seed: Optional[int] = None, mkwindows_stride: int = 1000, bins: int = 100,
-        blacklist: Optional[str] = None, chrom_starts_with: str = "chr",
-        dist_compare_plot_file: Optional[str] = None):
+    input_region_file: Union[str, pd.DataFrame, pybedtools.BedTool],
+    genome_size_file: str,
+    genome_fasta_file: str,
+    sample_scale_factor: float = 1.0,
+    seed: Optional[int] = None,
+    mkwindows_stride: int = 1000,
+    bins: int = 100,
+    blacklist: Optional[str] = None,
+    chrom_starts_with: str = "chr",
+    dist_compare_plot_file: Optional[str] = None,
+):
     """
     Generate GC content matched random regions for the input file
 
@@ -158,26 +190,48 @@ def generate_gc_matched_random_regions(
         0~2: coordinates
         3: GC%
     """
-    pybedtools.set_tempdir(".")
+    set_tmp_for_pbt()
 
     if type(input_region_file) is pybedtools.BedTool:
         bed_obj = pybedtools.BedTool.from_dataframe(
-            pd.read_csv(input_region_file.fn, sep="\t",
-                        header=None, usecols=[0, 1, 2])
+            pd.read_csv(
+                str(input_region_file.fn), sep="\t", header=None, usecols=[0, 1, 2]
+            )
         )
     elif isinstance(input_region_file, pd.DataFrame):
         bed_obj = pybedtools.BedTool.from_dataframe(
-            input_region_file[input_region_file.columns[:3]])
+            input_region_file[input_region_file.columns[:3]]
+        )
     else:
         bed_obj = pybedtools.BedTool.from_dataframe(
-            pd.read_csv(input_region_file, sep="\t", header=None, usecols=[0, 1, 2]))
+            pd.read_csv(
+                str(input_region_file), sep="\t", header=None, usecols=[0, 1, 2]
+            )
+        )
 
     bed_obj = bed_obj.filter(lambda x: len(x) > 0).saveas()
     # pylint: disable-next=unexpected-keyword-arg
-    region_content_df = bed_obj.nucleotide_content(fi=genome_fasta_file).saveas().to_dataframe(
-        names=("chrom", "start", "end", "pct_at", "pct_gc", "num_A",
-               "num_C", "num_G", "num_T", "num_N", "num_oth", "seq_len"),
-        comment="#")
+    region_content_df = (
+        bed_obj.nucleotide_content(fi=genome_fasta_file)
+        .saveas()
+        .to_dataframe(
+            names=(
+                "chrom",
+                "start",
+                "end",
+                "pct_at",
+                "pct_gc",
+                "num_A",
+                "num_C",
+                "num_G",
+                "num_T",
+                "num_N",
+                "num_oth",
+                "seq_len",
+            ),
+            comment="#",
+        )
+    )
 
     if region_content_df.shape[1] != 12:
         raise ValueError(
@@ -185,9 +239,12 @@ def generate_gc_matched_random_regions(
             f"got {region_content_df.shape[1]}."
         )
     act_bins, bin_crit = pd.cut(
-        region_content_df["pct_gc"], bins=bins, retbins=True, labels=np.arange(bins))
-    per_bin_sampling_target = (
-            act_bins.value_counts() * sample_scale_factor).to_dict()
+        region_content_df["pct_gc"],
+        bins=bins,
+        retbins=True,
+        labels=list(range(bins)),
+    )
+    per_bin_sampling_target = (act_bins.value_counts() * sample_scale_factor).to_dict()
 
     n_seq_lens = region_content_df["seq_len"].value_counts()
 
@@ -196,11 +253,15 @@ def generate_gc_matched_random_regions(
         # makewindows to replace the sampling process for better performance
         # genomic windows overlap with input regions will be removed
         length = n_seq_lens.index.values[0]
-        candidates = pybedtools.BedTool().makewindows(
-            g=genome_size_file, w=length, s=mkwindows_stride
-        ) if os.path.exists(genome_size_file) else pybedtools.BedTool().makewindows(
-            genome=genome_size_file, w=length, s=mkwindows_stride
-        ).saveas()
+        candidates = (
+            pybedtools.BedTool().makewindows(
+                g=genome_size_file, w=length, s=mkwindows_stride
+            )
+            if os.path.exists(genome_size_file)
+            else pybedtools.BedTool()
+            .makewindows(genome=genome_size_file, w=length, s=mkwindows_stride)
+            .saveas()
+        )
         # remove windows that are shorter than the requested length
         # this can happen when the windows are near the ends of chromosomes
         candidates = candidates.filter(
@@ -208,53 +269,87 @@ def generate_gc_matched_random_regions(
         ).saveas()
         if isinstance(blacklist, str) and os.path.exists(blacklist):
             candidates = candidates.intersect(
-                pybedtools.BedTool(blacklist), v=True).saveas()
+                pybedtools.BedTool(blacklist), v=True
+            ).saveas()
         candidate_scope = candidates.sort().to_dataframe().drop_duplicates()
     else:
-        raise ValueError("This function requires all regions to have identical length, "
-                         "please use `generate_gc_matched_random_regions` instead")
+        raise ValueError(
+            "This function requires all regions to have identical length, "
+            "please use `generate_gc_matched_random_regions` instead"
+        )
 
     # remove regions that are not from primary assembly
     candidate_scope = candidate_scope.loc[
-                      (candidate_scope.chrom.str.find("_") == -1) & (candidate_scope.chrom != "chrEBV"),
-                      :]
+        (candidate_scope.chrom.str.find("_") == -1)
+        & (candidate_scope.chrom != "chrEBV"),
+        :,
+    ]
     candidate_bed = pybedtools.BedTool.from_dataframe(candidate_scope)
     # pylint: disable-next=unexpected-keyword-arg,too-many-function-args
     candidate_regions = candidate_bed.intersect(bed_obj, v=True)
 
     # analyze nucleotide composition of these candidate regions
     # pylint: disable-next=unexpected-keyword-arg
-    nucleotide_contents = candidate_regions.nucleotide_content(fi=genome_fasta_file).saveas().to_dataframe(
-        names=("chrom", "start", "end",
-               "pct_at", "pct_gc", "num_A",
-               "num_C", "num_G", "num_T",
-               "num_N", "num_oth", "seq_len"),
-        comment="#")
+    nucleotide_contents = (
+        candidate_regions.nucleotide_content(fi=genome_fasta_file)
+        .saveas()
+        .to_dataframe(
+            names=(
+                "chrom",
+                "start",
+                "end",
+                "pct_at",
+                "pct_gc",
+                "num_A",
+                "num_C",
+                "num_G",
+                "num_T",
+                "num_N",
+                "num_oth",
+                "seq_len",
+            ),
+            comment="#",
+        )
+    )
 
     # remove regions with masked nts
     # nucleotide_contents = nucleotide_contents.loc[nucleotide_contents.num_N == 0, :]
     nucleotide_contents["bin"] = pd.cut(
-        nucleotide_contents["pct_gc"], bins=bin_crit, labels=np.arange(bins))
+        nucleotide_contents["pct_gc"],
+        bins=bin_crit,
+        labels=list(range(bins)),
+        include_lowest=True,
+    )
 
-    sampled_results = nucleotide_contents.groupby("bin").apply(
-        lambda x: x.sample(
-            min(int(per_bin_sampling_target[x.name]), x.shape[0]),
-            random_state=seed)
-    ).reset_index(drop=True)
-    sampled_results = sampled_results[[
-        "chrom", "start", "end", "pct_gc"]].copy()
+    sampled_results = (
+        nucleotide_contents.groupby("bin")
+        .apply(
+            lambda x: x.sample(
+                min(int(per_bin_sampling_target[x.name]), x.shape[0]), random_state=seed
+            )
+        )
+        .reset_index(drop=True)
+    )
+    sampled_results = sampled_results[["chrom", "start", "end", "pct_gc"]].copy()
 
     if dist_compare_plot_file is not None:
         try:
             import matplotlib
             import matplotlib.pyplot as plt
+
             matplotlib.use("Agg")
             import seaborn as sns
+
             ref = region_content_df[["pct_gc"]].copy()
             ref["label"] = "Reference"
             sampled = sampled_results[["pct_gc"]].copy()
             sampled["label"] = "Sampled"
-            sns.kdeplot(data=pd.concat([ref, sampled], ignore_index=True), x="pct_gc", hue="label", common_norm=False)
+            sns.kdeplot(
+                data=pd.concat([ref, sampled], ignore_index=True),
+                x="pct_gc",
+                hue="label",
+                common_norm=False,
+            )
             plt.savefig(dist_compare_plot_file, dpi=200)
             plt.close()
         except Exception as e:
@@ -291,7 +386,7 @@ def seq_to_one_hot(x: str, non_standard_as_zero: bool = False) -> np.ndarray:
         "B": ("C", "G", "T"),
         "D": ("A", "G", "T"),
         "H": ("A", "C", "T"),
-        "V": ("A", "C", "G")
+        "V": ("A", "C", "G"),
     }
     mat = np.zeros((len(alphabet), len(x)), dtype=float)
     x_treated = x.upper().replace("U", "T")
@@ -334,17 +429,25 @@ def retrieve_values_from_bw(bw, chrom, start, end):
         with 0. If an error occurs, an array of zeros with length (end - start) is returned.
     """
     try:
-        values = np.nan_to_num(
-            bw.values(chrom, start, end, numpy=True)
-        )
+        values = np.nan_to_num(bw.values(chrom, start, end, numpy=True))
     except RuntimeError as e:
-        logger.warning("Runtime error: {} when accessing data at {}:{}-{}".format(e, chrom, start, end))
+        logger.warning(
+            "Runtime error: {} when accessing data at {}:{}-{}".format(
+                e, chrom, start, end
+            )
+        )
         values = np.zeros(end - start)
     return values
 
 
-def extract_signal_from_bw(bw_obj: pyBigWig.pyBigWig, chrom: str, start: int, end: int,
-                           apply_abs: bool = True, sliding_sum: int = 0) -> np.ndarray:
+def extract_signal_from_bw(
+    bw_obj: pyBigWig.pyBigWig,
+    chrom: str,
+    start: int,
+    end: int,
+    apply_abs: bool = True,
+    sliding_sum: int = 0,
+) -> np.ndarray:
     """
     Extract signal values from a pyBigWig object, NaN values will be replaced with 0.
 
@@ -374,7 +477,8 @@ def extract_signal_from_bw(bw_obj: pyBigWig.pyBigWig, chrom: str, start: int, en
         signal_shifting = sliding_sum - 1
         values = np.lib.stride_tricks.sliding_window_view(
             retrieve_values_from_bw(bw_obj, chrom, start - signal_shifting, end),
-            sliding_sum).sum(axis=-1)
+            sliding_sum,
+        ).sum(axis=-1)
     else:
         values = retrieve_values_from_bw(bw_obj, chrom, start, end)
 
@@ -402,16 +506,22 @@ def check_bw_input(input_lst: List[Union[pyBigWig.pyBigWig, str]]):
                 raise IOError("Cannot access file {}".format(v))
         elif not isinstance(v, pyBigWig.pyBigWig):
             raise ValueError(
-                "Values in targets must be paths to bigwig files or pyBigWig instances")
+                "Values in targets must be paths to bigwig files or pyBigWig instances"
+            )
 
 
-def build_data_volume(regions: pd.DataFrame, target_pl_bws: List[Union[pyBigWig.pyBigWig, str]],
-                      target_mn_bws: List[Union[pyBigWig.pyBigWig, str]],
-                      accessibility_tracks: List[Union[pyBigWig.pyBigWig, str]],
-                      t_x: int, save_to: str, sequence_fasta: str,
-                      ref_pl_tracks: Optional[List[Union[pyBigWig.pyBigWig, str]]] = (),
-                      ref_mn_tracks: Optional[List[Union[pyBigWig.pyBigWig, str]]] = (),
-                      target_sliding_sum: int = 0):
+def build_data_volume(
+    regions: pd.DataFrame,
+    target_pl_bws: List[Union[pyBigWig.pyBigWig, str]],
+    target_mn_bws: List[Union[pyBigWig.pyBigWig, str]],
+    accessibility_tracks: List[Union[pyBigWig.pyBigWig, str]],
+    t_x: int,
+    save_to: str,
+    sequence_fasta: str,
+    ref_pl_tracks: Optional[List[Union[pyBigWig.pyBigWig, str]]] = None,
+    ref_mn_tracks: Optional[List[Union[pyBigWig.pyBigWig, str]]] = None,
+    target_sliding_sum: int = 0,
+):
     """
     Build data volumes for training
 
@@ -456,7 +566,12 @@ def build_data_volume(regions: pd.DataFrame, target_pl_bws: List[Union[pyBigWig.
     elif len(target_mn_bws) == 1:
         n_targets = 2
     else:
-        raise ValueError("target_mn_bws should have 0 (strandless) or 1 (stranded) values")
+        raise ValueError(
+            "target_mn_bws should have 0 (strandless) or 1 (stranded) values"
+        )
+
+    ref_pl_tracks = ref_pl_tracks or []
+    ref_mn_tracks = ref_mn_tracks or []
 
     if len(ref_pl_tracks) > 0:
         check_bw_input(ref_pl_tracks)
@@ -482,54 +597,117 @@ def build_data_volume(regions: pd.DataFrame, target_pl_bws: List[Union[pyBigWig.
         gr.attrs["t_x"] = t_x  # input length
         gr.attrs["n_clusters"] = n_clusters  # num of clusters
         gr.attrs["n_targets"] = n_targets  # num of clusters
-        dset_seq = gr.create_dataset("seq", (regions.shape[0], 4, t_x),
-                                     dtype="f", chunks=(1, 4, t_x), compression="gzip")
-        dset_acc = gr.create_dataset("acc", (regions.shape[0], n_clusters, t_x),
-                                     dtype="f", chunks=(1, n_clusters, t_x), compression="gzip")
-        dset_bulk = gr.create_dataset("bulk", (regions.shape[0], n_targets, t_x),
-                                      dtype="f", chunks=(1, n_targets, t_x), compression="gzip")
+        dset_seq = gr.create_dataset(
+            "seq",
+            (regions.shape[0], 4, t_x),
+            dtype="f",
+            chunks=(1, 4, t_x),
+            compression="gzip",
+        )
+        dset_acc = gr.create_dataset(
+            "acc",
+            (regions.shape[0], n_clusters, t_x),
+            dtype="f",
+            chunks=(1, n_clusters, t_x),
+            compression="gzip",
+        )
+        dset_bulk = gr.create_dataset(
+            "bulk",
+            (regions.shape[0], n_targets, t_x),
+            dtype="f",
+            chunks=(1, n_targets, t_x),
+            compression="gzip",
+        )
 
         if with_ref:
-            dset_ref = gr.create_dataset("ref", (regions.shape[0], n_targets * n_clusters, t_x),
-                                         dtype="f", chunks=(1, n_targets * n_clusters, t_x), compression="gzip")
+            dset_ref = gr.create_dataset(
+                "ref",
+                (regions.shape[0], n_targets * n_clusters, t_x),
+                dtype="f",
+                chunks=(1, n_targets * n_clusters, t_x),
+                compression="gzip",
+            )
         else:
             dset_ref = None
 
-        epig_fa_df = pybedtools.BedTool.from_dataframe(regions).nuc(
-            fi=sequence_fasta,
-            seq=True).to_dataframe(disable_auto_names=True, header=None, skiprows=1)
+        epig_fa_df = (
+            pybedtools.BedTool.from_dataframe(regions)
+            .nuc(fi=sequence_fasta, seq=True)
+            .to_dataframe(disable_auto_names=True, header=None, skiprows=1)
+        )
 
-        for i, row in tqdm(regions.iterrows(), total=regions.shape[0], disable=True):
-            dset_seq[i, :, :] = seq_to_one_hot(
-                epig_fa_df.loc[i, epig_fa_df.shape[1] - 1])
+        seq_col = epig_fa_df.shape[1] - 1
+        for i, row in enumerate(
+            tqdm(
+                regions.itertuples(index=False),
+                total=regions.shape[0],
+                disable=True,
+            )
+        ):
+            dset_seq[i, :, :] = seq_to_one_hot(epig_fa_df.iloc[i, seq_col])
 
             try:
                 dset_bulk[i, 0, :] = extract_signal_from_bw(
-                    target_pl_bws[0], row[0], row[1], row[2], sliding_sum=target_sliding_sum)
+                    target_pl_bws[0],
+                    row[0],
+                    row[1],
+                    row[2],
+                    sliding_sum=target_sliding_sum,
+                )
                 if n_targets == 2:
                     dset_bulk[i, 1, :] = extract_signal_from_bw(
-                        target_mn_bws[0], row[0], row[1], row[2], sliding_sum=target_sliding_sum)
+                        target_mn_bws[0],
+                        row[0],
+                        row[1],
+                        row[2],
+                        sliding_sum=target_sliding_sum,
+                    )
 
                 for row_idx in range(n_clusters):
                     dset_acc[i, row_idx, :] = extract_signal_from_bw(
-                        accessibility_bws[row_idx], row[0], row[1], row[2], sliding_sum=0)
+                        accessibility_bws[row_idx],
+                        row[0],
+                        row[1],
+                        row[2],
+                        sliding_sum=0,
+                    )
 
                     if with_ref:
+                        # pyrefly: ignore[unsupported-operation]
                         dset_ref[i, n_targets * row_idx, :] = extract_signal_from_bw(
-                            ref_pl_tracks[row_idx], row[0], row[1], row[2], sliding_sum=target_sliding_sum)
+                            ref_pl_tracks[row_idx],
+                            row[0],
+                            row[1],
+                            row[2],
+                            sliding_sum=target_sliding_sum,
+                        )
                         if n_targets == 2:
-                            dset_ref[i, n_targets * row_idx + 1, :] = extract_signal_from_bw(
-                                ref_mn_tracks[row_idx], row[0], row[1], row[2], sliding_sum=target_sliding_sum)
+                            # pyrefly: ignore[unsupported-operation]
+                            dset_ref[i, n_targets * row_idx + 1, :] = (
+                                extract_signal_from_bw(
+                                    ref_mn_tracks[row_idx],
+                                    row[0],
+                                    row[1],
+                                    row[2],
+                                    sliding_sum=target_sliding_sum,
+                                )
+                            )
             except RuntimeError as e:
                 raise ValueError(
                     "Error happened when processing {0}:{1}-{2}".format(
-                        row[0], row[1], row[2])
+                        row[0], row[1], row[2]
+                    )
                 ) from e
 
 
-def bed_to_cov_bw(in_bed_path: str, out_bigwig_path: str, chrom_size_path: str,
-                  rpm_norm: Optional[int] = None, report_5p_cov: bool = False,
-                  limit_strand_to: Optional[str] = None):
+def bed_to_cov_bw(
+    in_bed_path: str,
+    out_bigwig_path: str,
+    chrom_size_path: str,
+    rpm_norm: Optional[int] = None,
+    report_5p_cov: bool = False,
+    limit_strand_to: Optional[str] = None,
+):
     """
     Convert a file in bed format to bigWig format (coverage)
 
@@ -562,13 +740,13 @@ def bed_to_cov_bw(in_bed_path: str, out_bigwig_path: str, chrom_size_path: str,
     chrom_ranges = pybedtools.BedTool.from_dataframe(_chr_df[[0, 2, 1]])
     in_bed = pybedtools.BedTool(in_bed_path).intersect(chrom_ranges, u=True)
 
-    gc_kwargs = {"bg": True, "g": chrom_size_path}
+    gc_kwargs: dict[str, Any] = {"bg": True, "g": chrom_size_path}
     if report_5p_cov:
         gc_kwargs["5"] = True
     if rpm_norm is None:
-        gc_kwargs["scale"] = 1.
+        gc_kwargs["scale"] = 1.0
     else:
-        gc_kwargs["scale"] = 1000. * 1000. / rpm_norm
+        gc_kwargs["scale"] = 1000.0 * 1000.0 / rpm_norm
     if limit_strand_to is not None:
         gc_kwargs["strand"] = limit_strand_to
     gc_bed = in_bed.genome_coverage(**gc_kwargs).sort(g=chrom_size_path)
@@ -578,8 +756,13 @@ def bed_to_cov_bw(in_bed_path: str, out_bigwig_path: str, chrom_size_path: str,
     del gc_bed
 
 
-def frag_to_cut_sites(frag_df: Union[pd.DataFrame, str], save_to: str, chrom_size: str, window_size: int = 150,
-                      dual_directions: bool = False):
+def frag_to_cut_sites(
+    frag_df: Union[pd.DataFrame, str],
+    save_to: str,
+    chrom_size: str,
+    window_size: int = 150,
+    dual_directions: bool = False,
+):
     """Convert fragments to cut sizes
 
     Parameters
@@ -609,18 +792,28 @@ def frag_to_cut_sites(frag_df: Union[pd.DataFrame, str], save_to: str, chrom_siz
         frag_bed = pybedtools.BedTool.from_dataframe(frag_df)
     else:
         frag_bed = pybedtools.BedTool(frag_df)
-    start_side = frag_bed.flank(l=half_window, r=0, g=chrom_size).slop(r=half_window, l=0, g=chrom_size)
+    start_side = frag_bed.flank(l=half_window, r=0, g=chrom_size).slop(
+        r=half_window, l=0, g=chrom_size
+    )
     if dual_directions:
-        end_side = frag_bed.flank(r=half_window, l=0, g=chrom_size).slop(l=half_window, r=0, g=chrom_size)
-        pybedtools.BedTool.cat(
-            *[start_side, end_side], postmerge=False
-        ).sort().saveas(save_to)
+        end_side = frag_bed.flank(r=half_window, l=0, g=chrom_size).slop(
+            l=half_window, r=0, g=chrom_size
+        )
+        pybedtools.BedTool.cat(*[start_side, end_side], postmerge=False).sort().saveas(
+            save_to
+        )
     else:
         start_side.sort().saveas(save_to)
 
 
-def frag_file_to_bw(fragment_file: str, frag_proc: str, chrom_size: str, n_frags: int,
-                    rpm_norm: bool = False, save_to_workdir=False) -> str:
+def frag_file_to_bw(
+    fragment_file: str,
+    frag_proc: str,
+    chrom_size: str,
+    n_frags: int,
+    rpm_norm: bool = False,
+    save_to_workdir=False,
+) -> str:
     """
 
     Parameters
@@ -652,10 +845,14 @@ def frag_file_to_bw(fragment_file: str, frag_proc: str, chrom_size: str, n_frags
     if frag_proc == "naive":
         csb_file = fragment_file
     elif frag_proc == "encode":
-        csb_file = fragment_file.replace(".tsv.gz", ".cs.bed").replace(".tsv", ".cs.bed")
+        csb_file = fragment_file.replace(".tsv.gz", ".cs.bed").replace(
+            ".tsv", ".cs.bed"
+        )
         frag_to_cut_sites(fragment_file, csb_file, chrom_size, 150, False)
     elif frag_proc == "cellranger":
-        csb_file = fragment_file.replace(".tsv.gz", ".cs.bed").replace(".tsv", ".cs.bed")
+        csb_file = fragment_file.replace(".tsv.gz", ".cs.bed").replace(
+            ".tsv", ".cs.bed"
+        )
         frag_to_cut_sites(fragment_file, csb_file, chrom_size, 400, True)
     elif frag_proc == "5pi":  # 5' insert sites
         csb_file = fragment_file
@@ -670,15 +867,22 @@ def frag_file_to_bw(fragment_file: str, frag_proc: str, chrom_size: str, n_frags
     save_to = tmp.replace(".tsv.gz", ".bw").replace(".tsv", ".bw")
     if chrom_size is not None:
         bed_to_cov_bw(
-            csb_file, save_to, chrom_size,
+            csb_file,
+            save_to,
+            chrom_size,
             rpm_norm=n_frags if rpm_norm else None,
-            report_5p_cov=report_5p_cov)
+            report_5p_cov=report_5p_cov,
+        )
     return save_to
 
 
-def convert_bulk_frags_to_ct_frags(fragments_file: str, barcode_file: str, save_to: str,
-                                   reference_labels: Optional[Sequence[str]] = None,
-                                   memory_saving: Optional[bool] = False) -> tuple[dict, dict, list, pd.DataFrame]:
+def convert_bulk_frags_to_ct_frags(
+    fragments_file: str,
+    barcode_file: str,
+    save_to: str,
+    reference_labels: Optional[Sequence[str]] = None,
+    memory_saving: Optional[bool] = False,
+) -> tuple[dict, dict, list, pd.DataFrame]:
     """
     Convert fragments file to bigWig files for each cell type/cluster
 
@@ -724,10 +928,19 @@ def convert_bulk_frags_to_ct_frags(fragments_file: str, barcode_file: str, save_
     transformed_barcodes : pd.DataFrame
         column 0: barcode
         column 1: transformed cell type label
+
+    Raises
+    ------
+    ValueError
+        If the barcode file does not have 2 columns.
+        If the reference labels do not match the cell types.
+        If no fragments are found for any cell type.
     """.format(**PARAM_DESC)
     barcodes = pd.read_csv(barcode_file, sep="\t", header=None)
     if barcodes.shape[1] != 2:
-        raise ValueError("barcode_file should have 2 columns: the cell barcode and cell type annotation")
+        raise ValueError(
+            "barcode_file should have 2 columns: the cell barcode and cell type annotation"
+        )
     cell_types = sorted(barcodes[1].unique().tolist())
     logger.info(f"Cell types in the barcode file: {cell_types}")
     safe_cell_types_mapping = {ct: slugify(ct) for ct in cell_types}
@@ -741,13 +954,23 @@ def convert_bulk_frags_to_ct_frags(fragments_file: str, barcode_file: str, save_
 
     barcodes[2] = barcodes[1].map(safe_cell_types_mapping)
     bc_to_ct = barcodes.set_index(0).to_dict()[2]
-    out_files = {ct: f"{save_to}/{ct}.fragments.tsv" for ct in safe_cell_types_mapping.values()}
+    out_files = {
+        ct: f"{save_to}/{ct}.fragments.tsv" for ct in safe_cell_types_mapping.values()
+    }
 
-    logger.info("Generating pseudo-bulk fragment files based on their source cell type / cluster...")
+    logger.info(
+        "Generating pseudo-bulk fragment files based on their source cell type / cluster..."
+    )
     frags_per_ct = {ct: 0 for ct in safe_cell_types_mapping.values()}
     if memory_saving:
-        frag_file_handles = {ct: open(f"{save_to}/{ct}.fragments.tsv", "w") for ct in out_files.keys()}
-        in_frag_handle = gzip.open(fragments_file, "rt") if fragments_file.lower().endswith(".gz") else open(fragments_file)
+        frag_file_handles = {
+            ct: open(f"{save_to}/{ct}.fragments.tsv", "w") for ct in out_files.keys()
+        }
+        in_frag_handle = (
+            gzip.open(fragments_file, "rt")
+            if fragments_file.lower().endswith(".gz")
+            else open(fragments_file)
+        )
 
         total_frags = 0
         missing_frags = 0
@@ -775,13 +998,26 @@ def convert_bulk_frags_to_ct_frags(fragments_file: str, barcode_file: str, save_
         missing_frags = total_frags - all_frags.shape[0]
 
         for ct, sdf in all_frags.groupby("ctype"):
-            frags_per_ct[ct] = sdf.shape[0]
+            ct_key = str(ct)
+            frags_per_ct[ct_key] = sdf.shape[0]
             columns = sdf.columns
             # no need to save the cell type label
-            sdf[columns[:-1]].to_csv(out_files[ct], sep="\t", index=False, header=False)
+            sdf[columns[:-1]].to_csv(
+                out_files[ct_key], sep="\t", index=False, header=False
+            )
     logger.info(
-        f"{total_frags - missing_frags} / {total_frags} fragments can be associated to provided cell type annotations")
-    logger.info("Finished generating pseudo-bulk fragment files based on their source cell type / cluster...")
+        f"{total_frags - missing_frags} / {total_frags} fragments can be associated to provided cell type annotations"
+    )
+
+    empty_cell_types = sorted(ct for ct, n in frags_per_ct.items() if n == 0)
+    if empty_cell_types:
+        raise ValueError(
+            f"No fragments found for cell type(s): {', '.join(empty_cell_types)}."
+        )
+
+    logger.info(
+        "Finished generating pseudo-bulk fragment files based on their source cell type / cluster..."
+    )
 
     tbc = barcodes[[0, 2]].copy()
     tbc.columns = (0, 1)
@@ -804,13 +1040,17 @@ def merge_fragment_files(in_frags: list[str], save_to: str) -> int:
         number of total fragments in the merged file
     """
     sub_dfs = [pd.read_csv(f, sep="\t", header=None, comment="#") for f in in_frags]
-    merged_fragments = pd.concat(sub_dfs, ignore_index=True).sort_values([0, 1]).reset_index(drop=True)
+    merged_fragments = (
+        pd.concat(sub_dfs, ignore_index=True)
+        .sort_values(by=[0, 1])  # pyrefly: ignore[bad-argument-type]
+        .reset_index(drop=True)
+    )
     merged_fragments.to_csv(save_to, sep="\t", index=False, header=False)
 
     return merged_fragments.shape[0]
 
 
-def create_empty_bigwig(input_bw_path: str, output_bw_path: str, value: float = 0.):
+def create_empty_bigwig(input_bw_path: str, output_bw_path: str, value: float = 0.0):
     """
     Create a new BigWig file with zeros across all chromosomes based on an input BigWig file.
 

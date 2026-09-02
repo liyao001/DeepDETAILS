@@ -21,9 +21,9 @@ class ProfileLossTestCase(unittest.TestCase):
             rng.multinomial(200, softmax(np.random.randint(0, 50, 100)), size=1)
         )
         self.simulated_signals[0, 1, :] = torch.from_numpy(
-            rng.multinomial(200, [1/100.]*self.target_shape[2], size=1)
+            rng.multinomial(200, [1 / 100.0] * self.target_shape[2], size=1)
         )
-        
+
         # the second sample comes from |sin| or |cos| * 100, casted to the nearest integers
         self.simulated_signals[1, 0, :] = torch.from_numpy(
             np.abs((100 * np.sin(np.linspace(-np.pi, np.pi, 100))).astype(int))
@@ -34,12 +34,16 @@ class ProfileLossTestCase(unittest.TestCase):
 
         # the third sample comes from two gaussian distributions
         self.simulated_signals[2, 0, :] = torch.from_numpy(
-            np.histogram(np.random.default_rng().normal(50, 5, 1000), bins=100, range=(0, 100))[0]
+            np.histogram(
+                np.random.default_rng().normal(50, 5, 1000), bins=100, range=(0, 100)
+            )[0]
         )
         self.simulated_signals[2, 1, :] = torch.from_numpy(
-            np.histogram(np.random.default_rng().normal(30, 10, 1000), bins=100, range=(0, 100))[0]
+            np.histogram(
+                np.random.default_rng().normal(30, 10, 1000), bins=100, range=(0, 100)
+            )[0]
         )
-        
+
         # Simulate predictions
         # The first set of predictions captures the shape, but the values are scaled by a constant to the real values.
         # Expecting overall small loss, and loss for squash_05, stretch_2 should be smaller than that of squash_02 and stretch_3.
@@ -66,3 +70,8 @@ class ProfileLossTestCase(unittest.TestCase):
         self.assertTrue(squash_05_loss < random_loss)
         self.assertTrue(stretch_2_loss < random_loss)
         self.assertTrue(stretch_3_loss < random_loss)
+
+    def test_rmsle_root_flag_matches_sqrt(self):
+        root_loss = RMSLELoss(root=True)(self.preds_squash_05, self.simulated_signals)
+        mse_loss = RMSLELoss(root=False)(self.preds_squash_05, self.simulated_signals)
+        self.assertTrue(torch.isclose(root_loss, torch.sqrt(mse_loss)))

@@ -3,11 +3,11 @@ from torch import nn
 
 
 class ResidualConv(nn.Module):
-
     def __init__(self, filters, kernel_size, dilation_rate) -> None:
         super().__init__()
         self.conv = nn.LazyConv1d(
-            filters, kernel_size=kernel_size, padding="valid", dilation=dilation_rate)
+            filters, kernel_size=kernel_size, padding=0, dilation=dilation_rate
+        )
         self.relu = nn.ReLU()
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -30,11 +30,11 @@ class ResidualConv(nn.Module):
 
 
 class ResidualConvWithXProjection(nn.Module):
-
     def __init__(self, filters, kernel_size, dilation_rate) -> None:
         super().__init__()
         self.conv = nn.LazyConv1d(
-            filters, kernel_size=kernel_size, padding="valid", dilation=dilation_rate)
+            filters, kernel_size=kernel_size, padding=0, dilation=dilation_rate
+        )
         self.relu = nn.ReLU()
         self.inc_dim = nn.LazyConv1d(filters, 1)
 
