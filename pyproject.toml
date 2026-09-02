@@ -14,7 +14,6 @@ authors = [
   { name = "Li Yao", email = "regulatorygenome@gmail.com" },
 ]
 classifiers = [
-  "Development Status :: 3 - Alpha",
   "Programming Language :: Python",
   "Programming Language :: Python :: 3.10",
   "Programming Language :: Python :: 3.11",
@@ -26,7 +25,7 @@ classifiers = [
 dependencies = [
   "torch", "numpy", "pandas", "h5py", "pyfaidx",
   "pytorch-lightning", "torchmetrics", "einops",
-  "matplotlib", "tqdm", "biopython", "scikit-learn",
+  "matplotlib", "seaborn", "tqdm", "biopython", "scikit-learn",
   "pyBigWig", "pybedtools", "tensorboard",
   "scipy>=1.11.1", "wandb"
 ]
@@ -64,6 +63,12 @@ git_describe_command = "git describe --dirty --tags --long --match [0-9]* --matc
 [tool.hatch.build.hooks.vcs]
 version-file = "src/deepdetails/_version.py"
 
+[tool.hatch.build.targets.wheel]
+core-metadata-version = "2.4"
+
+[tool.hatch.build.targets.sdist]
+core-metadata-version = "2.4"
+
 [tool.hatch.envs.default]
 features = ["dev"]
 [tool.hatch.envs.default.scripts]
@@ -74,6 +79,7 @@ test-train = "pytest -m train {args:tests}"
 test-unit = "pytest -m unit {args:tests}"
 test-cov = "coverage run -m pytest {args:tests}"
 lint = "ruff check {args:.}"
+check-typos = "typos --config .typos.toml {args:.}"
 check-dist = "twine check {args:dist/*}"
 cov-report = [
   "- coverage combine",
@@ -87,12 +93,8 @@ cov = [
 [[tool.hatch.envs.all.matrix]]
 python = ["3.10", "3.11", "3.12", "3.13"]
 
-[tool.hatch.envs.types]
-dependencies = [
-  "mypy>=1.0.0",
-]
-[tool.hatch.envs.types.scripts]
-check = "mypy --install-types --non-interactive {args:src/deepdetails tests}"
+[tool.hatch.envs.hatch-check-types]
+config-path = "pyrefly.toml"
 
 [tool.coverage.run]
 source_pkgs = ["deepdetails", "tests"]
@@ -136,3 +138,50 @@ extend-exclude = [
 
 [tool.ruff.lint]
 select = ["E4", "E7", "E9", "F", "I"]
+
+# Pixi workspace.
+#   pixi shell              runtime env (CLI + bedtools / bedGraphToBigWig)
+#   pixi shell -e dev       plus hatch, pytest, ruff, typos, twine
+#   pixi run -e dev test    developer tasks
+[tool.pixi.workspace]
+channels = ["conda-forge", "bioconda"]
+platforms = ["osx-arm64", "linux-64"]
+
+[tool.pixi.dependencies]
+bedtools = "*"
+python = ">=3.10,<3.14"
+ucsc-bedgraphtobigwig = "*"
+libcurl = ">=8.21.0,<9"
+
+[tool.pixi.pypi-dependencies]
+deepdetails = { path = ".", editable = true }
+
+[tool.pixi.feature.dev.dependencies]
+hatch = "*"
+ruff = "*"
+twine = "*"
+typos = "*"
+
+# `dev` optional-dependencies (pytest, ruff, ...) are pulled in via features = ["dev"]
+
+[tool.pixi.environments]
+default = { features = [], solve-group = "default" }
+dev = { features = ["dev"], solve-group = "default" }
+
+# Developer tasks live on the dev feature.
+[tool.pixi.feature.dev.tasks]
+check = "hatch check"
+check-code = "hatch check code"
+check-fmt = "hatch check fmt"
+check-types = "hatch check types"
+lint = "ruff check ."
+ruff = "ruff check ."
+typos = "typos --config .typos.toml ."
+test = "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest tests"
+test-data = "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest -m data tests"
+test-fast = "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest -m 'not train and not gpu' tests"
+test-train = "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest -m train tests"
+test-unit = "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest -m unit tests"
+build = "hatch build"
+check-dist = "twine check dist/*"
+ci = { depends-on = ["check", "typos", "test-fast", "build", "check-dist"] }

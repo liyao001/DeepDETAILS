@@ -1,10 +1,10 @@
 import os
-from typing import Union
 
 import matplotlib.pyplot as plt
+import numpy as np
 import torch
 
-from deepdetails.helper.utils import get_log_dir
+from deepdetails.helper.utils import LightningLogger, get_log_dir
 
 
 def _get_scale(a=1):
@@ -32,14 +32,20 @@ def _adjust_y_ranges(axes):
 def _share_ylim(axes, ax_ids):
     y_lims = [axes[i].get_ylim() for i in ax_ids]
     for i in ax_ids:
-        axes[i].set_ylim(min(y_lims[0][0], *[ylim[0] for ylim in y_lims]),
-                         max(y_lims[0][1], *[ylim[1] for ylim in y_lims]))
+        axes[i].set_ylim(
+            min(y_lims[0][0], *[ylim[0] for ylim in y_lims]),
+            max(y_lims[0][1], *[ylim[1] for ylim in y_lims]),
+        )
         _adjust_y_ranges(axes[i])
 
 
-def bulk_visual_inspection(y_hats: torch.Tensor, y: torch.Tensor,
-                           per_cluster_y_hats: Union[None, torch.Tensor],
-                           prefix: str = ".", logger: Union[None, callable] = None):
+def bulk_visual_inspection(
+    y_hats: torch.Tensor,
+    y: torch.Tensor,
+    per_cluster_y_hats: torch.Tensor | None,
+    prefix: str = ".",
+    logger: LightningLogger | None = None,
+):
     """Generate a snapshot of the predicted bulk vs. input bulk
 
     Parameters
@@ -60,24 +66,34 @@ def bulk_visual_inspection(y_hats: torch.Tensor, y: torch.Tensor,
     -------
 
     """
-    sample_id = torch.randint(y_hats.size(0), (1, 1))[0, 0].item()
-    detached_y = y.detach().cpu().numpy()
-    detached_y_hat = y_hats.detach().cpu().numpy()
-    detached_per_cluster_y_hats = per_cluster_y_hats.detach().cpu().numpy()
+    sample_id = int(torch.randint(y_hats.size(0), (1, 1))[0, 0].item())
+    detached_y: np.ndarray = y.detach().cpu().numpy()
+    detached_y_hat: np.ndarray = y_hats.detach().cpu().numpy()
+    n_cluster_rows = per_cluster_y_hats.size(0) if per_cluster_y_hats is not None else 0
 
-    fig, axs = plt.subplots(2 + per_cluster_y_hats.shape[0] if per_cluster_y_hats is not None else 0,
-                            1, sharex=True)
+    fig, axs = plt.subplots(2 + n_cluster_rows, 1, sharex=True)
 
-    plot_data = [detached_y[sample_id, :, :], detached_y_hat[sample_id, :, :], ]
-    plot_label = ["Y", r"$\hat{Y}$", ]
-    for i in range(per_cluster_y_hats.size(0)):
-        plot_data.append(detached_per_cluster_y_hats[i, sample_id, :, :])
-        plot_label.append(r"$\hat{{Y}}_{}$".format(i))
+    plot_data = [
+        detached_y[sample_id, :, :],
+        detached_y_hat[sample_id, :, :],
+    ]
+    plot_label = [
+        "Y",
+        r"$\hat{Y}$",
+    ]
+    if per_cluster_y_hats is not None:
+        detached_per_cluster_y_hats: np.ndarray = (
+            per_cluster_y_hats.detach().cpu().numpy()
+        )
+        for i in range(n_cluster_rows):
+            plot_data.append(detached_per_cluster_y_hats[i, sample_id, :, :])
+            plot_label.append(r"$\hat{{Y}}_{}$".format(i))
 
     for i, (data, label) in enumerate(zip(plot_data, plot_label)):
         ax = axs[i]
         ax.plot(data[0, :], color="#FF0D57")
-        ax.plot(data[1, :] * -1, color="#1E88E5")
+        if data.shape[0] == 2:
+            ax.plot(data[1, :] * -1, color="#1E88E5")
         if i < 2:
             _adjust_y_ranges(ax)
         ax.set_ylabel(label)
@@ -85,7 +101,8 @@ def bulk_visual_inspection(y_hats: torch.Tensor, y: torch.Tensor,
         ax.spines["right"].set_visible(False)
 
     rows_sharing_y = tuple(range(2, len(axs)))
-    _share_ylim(axs, rows_sharing_y)
+    if rows_sharing_y:
+        _share_ylim(axs, rows_sharing_y)
 
     fig.align_ylabels()
     plt.tight_layout()
@@ -101,10 +118,15 @@ def bulk_visual_inspection(y_hats: torch.Tensor, y: torch.Tensor,
 
 
 def per_cluster_visual_inspection(
-        y_hats: torch.Tensor, per_cluster_y_hats: torch.Tensor,
-        y: torch.Tensor, per_cluster_y: torch.Tensor,
-        loads: torch.Tensor, weights: torch.Tensor,
-        prefix: str = ".", logger: Union[None, callable] = None):
+    y_hats: torch.Tensor,
+    per_cluster_y_hats: torch.Tensor,
+    y: torch.Tensor,
+    per_cluster_y: torch.Tensor,
+    loads: torch.Tensor,
+    weights: torch.Tensor,
+    prefix: str = ".",
+    logger: LightningLogger | None = None,
+):
     """Generate a snapshot of the per-cluster prediction vs. truth
 
     Parameters
@@ -129,27 +151,39 @@ def per_cluster_visual_inspection(
     Returns
     -------
 
-        """
-    sample_id = torch.randint(per_cluster_y_hats.size(1), (1, 1))[0, 0].item()
-    detached_y = y.detach().cpu().numpy()
-    detached_per_cluster_y_hats = per_cluster_y_hats.detach().cpu().numpy()
-    detached_y_hat = y_hats.detach().cpu().numpy()
-    detached_per_cluster_y = per_cluster_y.detach().cpu().numpy()
-    detached_loads = loads.detach().cpu().numpy()
-    detached_weights = weights.detach().cpu().numpy()
+    """
+    sample_id = int(torch.randint(per_cluster_y_hats.size(1), (1, 1))[0, 0].item())
+    detached_y: np.ndarray = y.detach().cpu().numpy()
+    detached_per_cluster_y_hats: np.ndarray = per_cluster_y_hats.detach().cpu().numpy()
+    detached_y_hat: np.ndarray = y_hats.detach().cpu().numpy()
+    detached_per_cluster_y: np.ndarray = per_cluster_y.detach().cpu().numpy()
+    detached_loads: np.ndarray = loads.detach().cpu().numpy()
+    detached_weights: np.ndarray = weights.detach().cpu().numpy()
 
     n_rows = 2 + per_cluster_y_hats.size(0) * 2
     fig, axs = plt.subplots(n_rows, 1, sharex=True, figsize=(5, 0.6 * n_rows))
-    plot_data = [detached_y[sample_id, :, :], detached_y_hat[sample_id, :, :], ]
-    plot_label = ["Y", r"$\hat{Y}$", ]
+    plot_data = [
+        detached_y[sample_id, :, :],
+        detached_y_hat[sample_id, :, :],
+    ]
+    plot_label = [
+        "Y",
+        r"$\hat{Y}$",
+    ]
     pred_rows = []
     truth_rows = []
     for i in range(per_cluster_y_hats.size(0)):
         plot_data.append(detached_per_cluster_y[i, sample_id, :, :])
-        plot_label.append(r"$Y_{}$".format(i) + "\n({:.3f})".format(detached_loads[sample_id, i].item()))
+        plot_label.append(
+            r"$Y_{}$".format(i)
+            + "\n({:.3f})".format(detached_loads[sample_id, i].item())
+        )
         truth_rows.append(2 * (i + 1))
         plot_data.append(detached_per_cluster_y_hats[i, sample_id, :, :])
-        plot_label.append(r"$\hat{{Y}}_{}$".format(i) + "\n({:.3f})".format(detached_weights[sample_id, i].item()))
+        plot_label.append(
+            r"$\hat{{Y}}_{}$".format(i)
+            + "\n({:.3f})".format(detached_weights[sample_id, i].item())
+        )
         pred_rows.append(2 * (i + 1) + 1)
 
     for i, (data, label) in enumerate(zip(plot_data, plot_label)):
